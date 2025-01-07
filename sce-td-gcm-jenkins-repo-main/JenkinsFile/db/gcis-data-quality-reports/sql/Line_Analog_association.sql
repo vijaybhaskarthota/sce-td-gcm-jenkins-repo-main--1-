@@ -4,7 +4,7 @@ column Category heading "Category" Format a51
 column COUNT heading "COUNT" Format 99999999999999999999
 column Comments heading "Comment" Format a10
 
-alter session set current_schema=tcgacds;
+alter session set current_schema=TCGACDS;
 
 select '1.1:Total number of analogs received from source EMS:' AS Category, count(*)  as count, 'Info' as Comments
 from 
