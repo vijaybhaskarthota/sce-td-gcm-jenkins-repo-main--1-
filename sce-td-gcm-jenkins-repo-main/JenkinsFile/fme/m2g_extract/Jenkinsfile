@@ -1,0 +1,98 @@
+#!groovy
+def fme_props
+def getFMEURL(String env,Map fme_props) {
+    def FME_URL
+    switch("${env}") {            
+         case 'DEV': 
+            FME_URL = "${fme_props['fme.server.url.dev']}"
+            break; 
+         case 'ST': 
+            FME_URL = "${fme_props['fme.server.url.st']}"
+            break; 
+        case 'PT': 
+            FME_URL = "${fme_props['fme.server.url.pt']}"
+            break;        
+        case 'REGR':
+            FME_URL = "${fme_props['fme.server.url.reg']}"
+            break;     
+        case 'BF':
+            FME_URL = "${fme_props['fme.server.url.bf']}"
+            break;     
+        case 'PROD':
+            FME_URL = "${fme_props['fme.server.url.prod']}"
+            break;     
+      }
+    return FME_URL
+}
+def getFMEToken(String env,Map fme_props) {
+    def FME_TOKEN
+    switch("${env}") {            
+         case 'DEV': 
+            FME_TOKEN = "${fme_props['fme.server.token.dev']}"
+            break; 
+         case 'ST': 
+            FME_TOKEN = "${fme_props['fme.server.token.st']}"
+            break; 
+        case 'PT': 
+            FME_TOKEN = "${fme_props['fme.server.token.pt']}"
+            break;        
+        case 'REGR':
+            FME_TOKEN = "${fme_props['fme.server.token.reg']}"
+            break;     
+        case 'BF':
+            FME_TOKEN = "${fme_props['fme.server.token.bf']}"
+            break;     
+        case 'PROD':
+            FME_TOKEN = "${fme_props['fme.server.token.prod']}"
+            break;     
+      }
+    return FME_TOKEN
+}
+pipeline {
+    agent any 
+        parameters {
+        choice(name: 'ENVIRONMENT', choices: ['DEV','ST','PT','REGR','BF','PROD'], description: "Please specify Environment")
+         //  \n Please provide the circuit names to be extracted by updating the excel file at \\sce\workgroup\AppData\<GCM Env specific NAS>\M2G_Payload\INPUT\Circuit_NameforXML.csv \n The extracted M2G XML files are available at the location \\sce\workgroup\AppData\<GCM Env specific NAS>\M2G_Payload\OUTPUT 
+        }
+        options {
+        office365ConnectorWebhooks([[name: "${env.JOB_NAME}", notifyAborted: true, notifyBackToNormal: true, notifyFailure: true, notifyNotBuilt: true, notifyRepeatedFailure: true, notifySuccess: true, notifyUnstable: true, startNotification: true, url: "${getJenkinsWebhookURL()}"]])
+        buildDiscarder logRotator(artifactDaysToKeepStr: '30', artifactNumToKeepStr: '30', daysToKeepStr: '30', numToKeepStr: '30')
+        disableConcurrentBuilds()
+        timestamps()
+        //skipDefaultCheckout()
+        }
+    stages {
+        stage('Initialize') { 
+            steps {
+                script{
+                    fme_props = loadProperties("FME")
+                }
+            }
+        }
+        stage('Extract M2G Service Data') { 
+            environment {
+                FME_URL = getFMEURL("${ENVIRONMENT}",fme_props)
+                FME_TOKEN = getFMEToken("${ENVIRONMENT}",fme_props)
+            }
+            steps {
+                powershell label: 'Executing Extract M2G Service Data', script: '.\\JenkinsFile\\gcis-fme\\m2g_extract\\execute_fme.ps1'             
+            }
+        }
+   }
+    post { 
+        always { 
+            //archiveArtifacts artifacts: 'CICD/*.sql,CICD/*.log,*.log,output/*', followSymlinks: false
+            //publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'output', reportFiles: 'CodeAnalysisReport.html', reportName: 'Code Analysis Report', reportTitles: 'CodeAnalysisReport'])
+            echo "Proceeding with Cleanup Activities"
+            //cleanWs()
+        }
+        success {
+            office365ConnectorSend color: '#00FF00', message: "Completed ${env.BRANCH} ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Success', webhookUrl: "${getJenkinsWebhookURL()}"
+        }
+        failure{
+            office365ConnectorSend color: '#FF0000', message: "Completed ${env.BRANCH} ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Failure', webhookUrl: "${getJenkinsWebhookURL()}"
+        }
+
+
+    }
+}

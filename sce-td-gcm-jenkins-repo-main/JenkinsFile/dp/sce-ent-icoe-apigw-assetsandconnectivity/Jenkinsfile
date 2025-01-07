@@ -1,0 +1,574 @@
+#!groovy
+def dp_props
+def release_props
+def DPUtil
+pipeline {
+    agent any 
+    parameters {
+        choice(name: 'NUM_OF_COMMIT', choices: ['1', '2', '3', '4','5','6','7', '8', '9', '10','20'], description: 'Select Num of commits')
+        choice(name: 'ACTION', choices: ['INSTALL','ROLLBACK','GET_CURRENT_DEPLOYED_VERSION','ENABLE_GCM_OUTAGE','REMOVE_GCM_OUTAGE'], description: 'Select Action')
+        booleanParam(name: 'SkipTests', defaultValue: false, description: 'Do you want to skip Ready API Testing?')
+        booleanParam(name: 'SkipCodeAnalysis', defaultValue: false, description: 'Do you want to skip Code Analysis')
+    }
+    options {
+    office365ConnectorWebhooks([[name: "${env.JOB_NAME}", notifyAborted: true, notifyBackToNormal: true, notifyFailure: true, notifyNotBuilt: true, notifyRepeatedFailure: true, notifySuccess: true, notifyUnstable: true, startNotification: true, url: "${getJenkinsWebhookURL()}"]])
+    buildDiscarder logRotator(artifactDaysToKeepStr: '30', artifactNumToKeepStr: '30', daysToKeepStr: '30', numToKeepStr: '30')
+    disableConcurrentBuilds()
+    //timestamps()
+    }
+    stages {
+        stage('Build & Octane Integration') { 
+            when {
+                not {
+                    allOf {
+                        branch "master";
+                        expression {
+                            return currentBuild.getBuildCauses().any{cause -> cause.toString().contains('BranchIndexingCause')}
+                        }
+                    }
+                }  
+            }
+            steps {
+                script{
+                    dp_props = loadProperties("DP")
+                    release_props = loadProperties("RELEASE")
+                    DPUtil = new DPUtils()
+                    readyAPIUtils = new ReadyAPIUtils()
+                    if("master" == "${env.BRANCH_NAME}") {
+                        currentBuild.displayName = "#${env.BUILD_NUMBER} - ${env.ACTION} - ${env.BRANCH_NAME} - ${release_props['gcm.release.prod.crq']}"
+                    }else{                        
+                        currentBuild.displayName = "#${env.BUILD_NUMBER} - ${env.ACTION} - ${env.BRANCH_NAME} - ${release_props['gcm.release.non_prod.crq']}"
+                    }
+                    try{
+                        collectBranchesToAlmOctane configurationId: 'cb826be3-f417-4ac7-81e5-eb62239438f0', credentialsId: 'git-svc-acct', filter: '', repositoryUrl: "${env.GIT_URL}", scmTool: 'github_cloud', workspaceId: '2001'
+                        collectPullRequestsToAlmOctane configurationId: 'cb826be3-f417-4ac7-81e5-eb62239438f0', credentialsId: 'git-svc-acct', repositoryUrl: "${env.GIT_URL}", scmTool: 'github_cloud', sourceBranchFilter: '', targetBranchFilter: '', workspaceId: '2001'
+                    }
+                    catch(Exception e){
+                        echo 'Exception occurred: ' + e.toString()    
+                    }                    
+                }
+            }
+        }
+        stage('SonarQube and CodeQL Analysis'){
+            when {
+                anyOf {
+                    environment name: 'ACTION', value: 'INSTALL'
+                    environment name: 'ACTION', value: 'ROLLBACK'
+                    environment name: 'ACTION', value: 'GET_CURRENT_DEPLOYED_VERSION'
+                }
+                not {expression { params.SkipCodeAnalysis} }
+                beforeOptions true
+                // Code for skipping branch indexing in Master branch
+                not {
+                    allOf {
+                        branch "master";
+                        expression {
+                            return currentBuild.getBuildCauses().any{cause -> cause.toString().contains('BranchIndexingCause')}
+                        }
+                    }
+                }
+                // End of Code for skipping branch indexing in Master branch
+            }
+            tools {  jdk 'jdk17' }  
+            environment { scannerHome = tool 'SonarQubeScanner' }              
+            steps{
+                echo "Skipping Sonar and CodeQl Quality gate - for debugging technical issues"
+                withSonarQubeEnv(installationName: 'EnterpriseDevops-SonarQubeServer', credentialsId: 'EnterpriseDevops-SonarToken') {
+                    //echo "Skipping Sonar Scans for Testing"
+                    bat "${scannerHome}/bin/sonar-scanner -Dsonar.projectKey=com.sce.apigw:assetsandconnectivity -Dsonar.projectName=assetsandconnectivity -Dsonar.projectVersion=1.0.0 -Dsonar.sourceEncoding=UTF-8 -Dsonar.sources=."
+                    script{
+                        DPUtil.codeQLScanDP()
+                    }    
+                }
+            }
+        }    
+        stage("Sonar Quality Gate"){
+            when {
+                anyOf {
+                    environment name: 'ACTION', value: 'INSTALL'
+                    environment name: 'ACTION', value: 'ROLLBACK'
+                    environment name: 'ACTION', value: 'GET_CURRENT_DEPLOYED_VERSION'
+                }
+                not {expression { params.SkipCodeAnalysis} }
+                beforeOptions true
+                // Code for skipping branch indexing in Master branch
+                not {
+                    allOf {
+                        branch "master";
+                        expression {
+                            return currentBuild.getBuildCauses().any{cause -> cause.toString().contains('BranchIndexingCause')}
+                        }
+                    }
+                }
+                // End of Code for skipping branch indexing in Master branch
+            }  
+            steps{
+                echo "Skipping Sonar Quality gate - tech issues to be resolved by Ent Devops team"
+                // timeout(time: 5, unit: 'MINUTES') { // Just in case something goes wrong, pipeline will be killed after a timeout
+                //     waitForQualityGate abortPipeline: false
+                // }
+
+            }
+        }
+        stage('Deploy and Test') {
+            when {
+                not {
+                    allOf {
+                        branch "master";
+                        expression {
+                            return currentBuild.getBuildCauses().any{cause -> cause.toString().contains('BranchIndexingCause')}
+                        }
+                    }
+                }  
+            }
+            parallel {
+                stage("1. DEV") {
+                    when { anyOf { branch 'DEV';  } }
+                    environment {
+                        dp_server = "${dp_props['dp.server.dev']}"
+                        dp_catalog = "${dp_props['dp.catalog.dev']}"
+                        dp_org = "${dp_props['dp.org.dev']}"
+                        dp_space = "${dp_props['dp.space.dev']}"
+                        dp_user = "${dp_props['dp.user']}"
+                        dp_pass = "${dp_props['dp.pass']}"
+                        dp_credjson = "${dp_props['dp.jsoncred.dev']}" 
+                        dp_plan_mapping = "NONE"
+                    }  
+                    stages{
+                        stage('ENABLE_GCM_OUTAGE'){
+                            when {
+                                environment ignoreCase: true, name: 'ACTION', value: 'ENABLE_GCM_OUTAGE'
+                                beforeOptions true
+                            }
+                            steps {
+                                script{
+                                    DPUtil.enable_gcm_outage()
+                                }
+                            }     
+                        }
+                        stage('REMOVE_GCM_OUTAGE'){
+                            when {
+                                environment ignoreCase: true, name: 'ACTION', value: 'REMOVE_GCM_OUTAGE'
+                                beforeOptions true
+                            }
+                            steps {
+                                script{
+                                    DPUtil.remove_gcm_outage()
+                                }
+                            }     
+                        }
+                        stage('Deploy') { 
+                            when {
+                                anyOf {
+                                    environment name: 'ACTION', value: 'INSTALL'
+                                    environment name: 'ACTION', value: 'ROLLBACK'
+                                    environment name: 'ACTION', value: 'GET_CURRENT_DEPLOYED_VERSION'
+                                }
+                                beforeOptions true
+                            }  
+                            steps {
+                                script{                                  
+                                    DPUtil.deploy()
+                                }
+                            } 
+                        }      
+                        stage('Test') { 
+                            when {
+                                anyOf {
+                                    environment name: 'ACTION', value: 'INSTALL'
+                                    environment name: 'ACTION', value: 'ROLLBACK'
+                                }
+                                not {expression { params.SkipTests} }
+                                beforeOptions true
+                            } 
+                            steps {
+                                script{
+                                    readyAPIUtils.executeReadyAPITest('ALL','DEV_v3',true)
+                                    readyAPIUtils.executeReadyAPITest('DC','DEV_v4',true)
+                                    readyAPIUtils.executeReadyAPITest('DC','DEV_v5',true)
+                                    readyAPIUtils.executeReadyAPITest('M2G','DEV_v4',true)                         
+                                }
+                            }
+                        }                         
+                    }
+                }    
+                stage("2. ST") {
+                    when { anyOf { branch 'ST';  } }
+                    environment {
+                        dp_server = "${dp_props['dp.server.st']}"
+                        dp_catalog = "${dp_props['dp.catalog.st']}"
+                        dp_org = "${dp_props['dp.org.st']}"
+                        dp_space = "${dp_props['dp.space.st']}"
+                        dp_user = "${dp_props['dp.user']}"
+                        dp_pass = "${dp_props['dp.pass']}"
+                        dp_credjson = "${dp_props['dp.jsoncred.st']}" 
+                        dp_plan_mapping = "PRODUCT_PLAN_MAPPING_FILE_DEV-ST"
+                    }  
+                    stages{
+                        stage('ENABLE_GCM_OUTAGE'){
+                            when {
+                                environment ignoreCase: true, name: 'ACTION', value: 'ENABLE_GCM_OUTAGE'
+                                beforeOptions true
+                            }
+                            steps {
+                                script{
+                                    DPUtil.enable_gcm_outage()
+                                }
+                            }     
+                        }
+                        stage('REMOVE_GCM_OUTAGE'){
+                            when {
+                                environment ignoreCase: true, name: 'ACTION', value: 'REMOVE_GCM_OUTAGE'
+                                beforeOptions true
+                            }
+                            steps {
+                                script{
+                                    DPUtil.remove_gcm_outage()
+                                }
+                            }     
+                        }
+                        stage('Deploy') { 
+                            when {
+                                anyOf {
+                                    environment name: 'ACTION', value: 'INSTALL'
+                                    environment name: 'ACTION', value: 'ROLLBACK'
+                                    environment name: 'ACTION', value: 'GET_CURRENT_DEPLOYED_VERSION'
+                                }
+                                beforeOptions true
+                            }  
+                            steps {
+                                script{
+                                    DPUtil.deploy()
+                                }
+                            } 
+                        }      
+                        stage('Test') { 
+                            when {
+                                anyOf {
+                                    environment name: 'ACTION', value: 'INSTALL'
+                                    environment name: 'ACTION', value: 'ROLLBACK'
+                                }
+                                not {expression { params.SkipTests} }
+                                beforeOptions true
+                            } 
+                            steps {
+                                script{
+                                    readyAPIUtils.executeReadyAPITest('ALL','ST_v3',true)
+                                    readyAPIUtils.executeReadyAPITest('DC','ST_v4',true)
+                                    readyAPIUtils.executeReadyAPITest('DC','ST_v5',true)
+                                    readyAPIUtils.executeReadyAPITest('M2G','ST_v4',true)                            
+                                }
+                            }
+                        }                         
+                    }
+                }   
+                stage("3. PT") {
+                    when { anyOf { branch 'PT';  } }
+                    environment {
+                        dp_server = "${dp_props['dp.server.pt']}"
+                        dp_catalog = "${dp_props['dp.catalog.pt']}"
+                        dp_org = "${dp_props['dp.org.pt']}"
+                        dp_space = "${dp_props['dp.space.pt']}"
+                        dp_user = "${dp_props['dp.user']}"
+                        dp_pass = "${dp_props['dp.pass']}"
+                        dp_credjson = "${dp_props['dp.jsoncred.pt']}" 
+                        dp_plan_mapping = "NONE"
+                    }  
+                    stages{
+                        stage('ENABLE_GCM_OUTAGE'){
+                            when {
+                                environment ignoreCase: true, name: 'ACTION', value: 'ENABLE_GCM_OUTAGE'
+                                beforeOptions true
+                            }
+                            steps {
+                                script{
+                                    DPUtil.enable_gcm_outage()
+                                }
+                            }     
+                        }
+                        stage('REMOVE_GCM_OUTAGE'){
+                            when {
+                                environment ignoreCase: true, name: 'ACTION', value: 'REMOVE_GCM_OUTAGE'
+                                beforeOptions true
+                            }
+                            steps {
+                                script{
+                                    DPUtil.remove_gcm_outage()
+                                }
+                            }     
+                        }
+                        stage('Deploy') { 
+                            when {
+                                anyOf {
+                                    environment name: 'ACTION', value: 'INSTALL'
+                                    environment name: 'ACTION', value: 'ROLLBACK'
+                                    environment name: 'ACTION', value: 'GET_CURRENT_DEPLOYED_VERSION'
+                                }
+                                beforeOptions true
+                            }  
+                            steps {
+                                script{
+                                    DPUtil.deploy()
+                                }
+                            } 
+                        }      
+                        stage('Test') { 
+                            when {
+                                anyOf {
+                                    environment name: 'ACTION', value: 'INSTALL'
+                                    environment name: 'ACTION', value: 'ROLLBACK'
+                                }
+                                not {expression { params.SkipTests} }
+                                beforeOptions true
+                            }
+                            steps {
+                                script{
+                                    readyAPIUtils.executeReadyAPITest('ALL','PT_v3',true)
+                                    readyAPIUtils.executeReadyAPITest('DC','PT_v4',true)
+                                    readyAPIUtils.executeReadyAPITest('DC','PT_v5',true)
+                                    readyAPIUtils.executeReadyAPITest('M2G','PT_v4',true)                            
+                                }
+                            }
+                        }                         
+                    }
+                }   
+                stage("4. REG") {
+                    when { anyOf { branch 'REG';  } }
+                    environment {
+                        dp_server = "${dp_props['dp.server.reg']}"
+                        dp_catalog = "${dp_props['dp.catalog.reg']}"
+                        dp_org = "${dp_props['dp.org.reg']}"
+                        dp_space = "${dp_props['dp.space.reg']}"
+                        dp_user = "${dp_props['dp.user']}"
+                        dp_pass = "${dp_props['dp.pass']}"
+                        dp_credjson = "${dp_props['dp.jsoncred.reg']}" 
+                        dp_plan_mapping = "NONE"
+                    }  
+                    stages{
+                        stage('ENABLE_GCM_OUTAGE'){
+                            when {
+                                environment ignoreCase: true, name: 'ACTION', value: 'ENABLE_GCM_OUTAGE'
+                                beforeOptions true
+                            }
+                            steps {
+                                script{
+                                    DPUtil.enable_gcm_outage()
+                                }
+                            }     
+                        }
+                        stage('REMOVE_GCM_OUTAGE'){
+                            when {
+                                environment ignoreCase: true, name: 'ACTION', value: 'REMOVE_GCM_OUTAGE'
+                                beforeOptions true
+                            }
+                            steps {
+                                script{
+                                    DPUtil.remove_gcm_outage()
+                                }
+                            }     
+                        }
+                        stage('Deploy') { 
+                            when {
+                                anyOf {
+                                    environment name: 'ACTION', value: 'INSTALL'
+                                    environment name: 'ACTION', value: 'ROLLBACK'
+                                    environment name: 'ACTION', value: 'GET_CURRENT_DEPLOYED_VERSION'
+                                }
+                                beforeOptions true
+                            }  
+                            steps {
+                                script{
+                                    DPUtil.deploy()
+                                }
+                            } 
+                        }      
+                        stage('Test') { 
+                            when {
+                                anyOf {
+                                    environment name: 'ACTION', value: 'INSTALL'
+                                    environment name: 'ACTION', value: 'ROLLBACK'
+                                }
+                                not {expression { params.SkipTests} }
+                                beforeOptions true
+                            }
+                            steps {
+                                script{
+                                    readyAPIUtils.executeReadyAPITest('ALL','REGR_v3',true)
+                                    readyAPIUtils.executeReadyAPITest('DC','REGR_v4',true)
+                                    readyAPIUtils.executeReadyAPITest('DC','REGR_v5',true)
+                                    readyAPIUtils.executeReadyAPITest('M2G','REGR_v4',true)                            
+                                }
+                            }
+                        }                         
+                    }
+                }   
+                stage("5. PROD") {
+                    when { anyOf { branch 'master';  } }
+                    environment {
+                        dp_server = "${dp_props['dp.server.prod']}"
+                        dp_catalog = "${dp_props['dp.catalog.prod']}"
+                        dp_org = "${dp_props['dp.org.prod']}"
+                        dp_space = "${dp_props['dp.space.prod']}"
+                        dp_user = "${dp_props['dp.user']}"
+                        dp_pass = "${dp_props['dp.pass']}"
+                        dp_credjson = "${dp_props['dp.jsoncred.prod']}" 
+                        dp_plan_mapping = "NONE"
+                    }  
+                    stages{
+                        stage('Seek Secondary Approval'){
+                            steps{
+                                script{
+                                    def permittedUsersInput = "${dp_props['dp.permitterusers.prod']}"
+                                    echo "Approval is required for Production Deployment(Action:${env.ACTION}) by ${permittedUsersInput} or DevSecOps Adminstrators"
+                                    def approver= input id: 'AccessCheckID', message: "Proceed with the execution in Prod (Action:${env.ACTION})", submitter: "${permittedUsersInput}", submitterParameter: 'approver'
+                                    echo "Approval is provided for Production Deployment(Action:${env.ACTION}) by: ${approver}"
+                                    //buildName "#${env.BUILD_NUMBER} - ${ENVIRONMENT} - ${release_props['gcm.release.prod.crq']}"  
+                                    currentBuild.displayName = "#${env.BUILD_NUMBER} - ${env.ACTION} - ${env.BRANCH_NAME} - ${release_props['gcm.release.prod.crq']}"
+                                }
+                            }
+                        }
+                        stage('ENABLE_GCM_OUTAGE'){
+                            when {
+                                environment ignoreCase: true, name: 'ACTION', value: 'ENABLE_GCM_OUTAGE'
+                                beforeOptions true
+                            }
+                            steps {
+                                script{
+                                    DPUtil.enable_gcm_outage()
+                                }
+                            }     
+                        }
+                        stage('REMOVE_GCM_OUTAGE'){
+                            when {
+                                environment ignoreCase: true, name: 'ACTION', value: 'REMOVE_GCM_OUTAGE'
+                                beforeOptions true
+                            }
+                            steps {
+                                script{
+                                    DPUtil.remove_gcm_outage()
+                                }
+                            }     
+                        }
+                        stage('Deploy') {
+                            when {
+                                anyOf {
+                                    environment name: 'ACTION', value: 'INSTALL'
+                                    environment name: 'ACTION', value: 'ROLLBACK'
+                                    environment name: 'ACTION', value: 'GET_CURRENT_DEPLOYED_VERSION'
+                                }
+                                beforeOptions true
+                            }  
+                            steps {
+                                script{
+                                    DPUtil.deploy()
+                                }
+                            } 
+                        }      
+                        stage('Test') {
+                            when {
+                                anyOf {
+                                    environment name: 'ACTION', value: 'INSTALL'
+                                    environment name: 'ACTION', value: 'ROLLBACK'
+                                }
+                                not {expression { params.SkipTests} }
+                                beforeOptions true
+                            }
+                            steps {
+                                script{
+                                    readyAPIUtils.executeReadyAPITest('ALL','PROD_v3',true)
+                                    readyAPIUtils.executeReadyAPITest('DC','PROD_v4',true)
+                                    readyAPIUtils.executeReadyAPITest('DC','PROD_v5',true)
+                                    readyAPIUtils.executeReadyAPITest('M2G','PROD_v4',true)                            
+                                }
+                            }
+                        }                         
+                    }
+                }   
+                stage("6. BF") {
+                    when { anyOf { branch 'BF';  } }
+                    environment {
+                        dp_server = "${dp_props['dp.server.bf']}"
+                        dp_catalog = "${dp_props['dp.catalog.bf']}"
+                        dp_org = "${dp_props['dp.org.bf']}"
+                        dp_space = "${dp_props['dp.space.bf']}"
+                        dp_user = "${dp_props['dp.user']}"
+                        dp_pass = "${dp_props['dp.pass']}"
+                        dp_credjson = "${dp_props['dp.jsoncred.bf']}" 
+                        dp_plan_mapping = "NONE"
+                    }  
+                    stages{
+                        stage('ENABLE_GCM_OUTAGE'){
+                            when {
+                                environment ignoreCase: true, name: 'ACTION', value: 'ENABLE_GCM_OUTAGE'
+                                beforeOptions true
+                            }
+                            steps {
+                                script{
+                                    DPUtil.enable_gcm_outage()
+                                }
+                            }     
+                        }
+                        stage('REMOVE_GCM_OUTAGE'){
+                            when {
+                                environment ignoreCase: true, name: 'ACTION', value: 'REMOVE_GCM_OUTAGE'
+                                beforeOptions true
+                            }
+                            steps {
+                                script{
+                                    DPUtil.remove_gcm_outage()
+                                }
+                            }     
+                        }
+                        stage('Deploy') { 
+                            when {
+                                anyOf {
+                                    environment name: 'ACTION', value: 'INSTALL'
+                                    environment name: 'ACTION', value: 'ROLLBACK'
+                                    environment name: 'ACTION', value: 'GET_CURRENT_DEPLOYED_VERSION'
+                                }
+                                beforeOptions true
+                            }  
+                            steps {
+                                script{
+                                    DPUtil.deploy()
+                                }
+                            } 
+                        }      
+                        stage('Test') { 
+                            when {
+                                anyOf {
+                                    environment name: 'ACTION', value: 'INSTALL'
+                                    environment name: 'ACTION', value: 'ROLLBACK'
+                                }
+                                not {expression { params.SkipTests} }
+                                beforeOptions true
+                            }
+                            steps {
+                                script{
+                                    readyAPIUtils.executeReadyAPITest('ALL','BF_v3',true)
+                                    readyAPIUtils.executeReadyAPITest('DC','BF_v4',true)
+                                    readyAPIUtils.executeReadyAPITest('DC','BF_v5',true)
+                                    readyAPIUtils.executeReadyAPITest('M2G','BF_v4',true)                            
+                                }
+                            }
+                        }                         
+                    }
+                }   
+            }
+
+        }
+
+    }    
+    post{ 
+        always {
+           archiveArtifacts artifacts: "assets-and-connectivity*.yaml", followSymlinks: false
+           cleanWs()
+        }
+        success {
+            office365ConnectorSend color: '#00FF00', message: "Completed ${env.BRANCH_NAME} ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Success', webhookUrl: "${getJenkinsWebhookURL()}"
+        }
+        failure{
+            office365ConnectorSend color: '#FF0000', message: "Completed ${env.BRANCH_NAME} ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Failure', webhookUrl: "${getJenkinsWebhookURL()}"
+        }
+    }
+}

@@ -1,0 +1,155 @@
+#!groovy
+def db_props
+def return_Reportlist(){
+    //return list of all reports seperated by \n
+    def report_files = findFiles(glob: 'JenkinsFile/db/gcis-data-quality-reports/sql/*.sql')
+    def report_list = [] as ArrayList
+    for (file in report_files) {
+            echo "${file.name}:${file.path}:${file.directory}:${file.length}:${file.lastModified}"
+            report_list.add("${file.name}")
+    }
+    return report_list
+}
+pipeline {
+    agent any 
+        options {
+        office365ConnectorWebhooks([[name: "${env.JOB_NAME}", notifyAborted: true, notifyBackToNormal: true, notifyFailure: true, notifyNotBuilt: true, notifyRepeatedFailure: true, notifySuccess: true, notifyUnstable: true, startNotification: true, url: "${getJenkinsWebhookURL()}"]])
+        buildDiscarder logRotator(artifactDaysToKeepStr: '30', artifactNumToKeepStr: '30', daysToKeepStr: '30', numToKeepStr: '30')
+        //disableConcurrentBuilds()
+        //timestamps()
+        skipDefaultCheckout(true)
+        }
+    stages {
+        stage('Initialize') { 
+            steps {  
+                script {  
+                    db_props = loadProperties("DB") 
+                    cleanWs()
+                    checkout scm
+                    currentBuild.displayName = "#${env.BUILD_NUMBER} - ${env.ENVIRONMENT} - ${env.DQ_REPORT}"
+                    properties([ 
+                        parameters([
+                            choice(name: 'ENVIRONMENT', choices: ['ALL','DEV','ST','PT','REGR','BF','PROD'], description: 'Environment'),
+                            //choice(name: 'DQ_REPORT',   choices: [script{return_Reportlist()}], description: 'Data Quality Report Name')
+                            choice(name: 'DQ_REPORT',   choices: script{return_Reportlist()}, description: 'Data Quality Report Name')
+                        ])
+                    ])
+                }
+            }
+        }
+        stage('Data Qaulity Reports different Environments') {
+            parallel {
+                stage("0. DEV") {
+                when {  
+                    anyOf{
+                        environment name: 'ENVIRONMENT', value: 'ALL' 
+                        environment name: 'ENVIRONMENT', value: 'DEV'              
+                    }
+                }
+                environment {
+                        DB_CRED = credentials('GCM-Dev-DB-ECMRW-RW')
+                        DB_CONN_STR = "${db_props['db.oracle.url.dev']}"
+                        ENV = "DEV"
+                }  
+                steps {
+                    powershell label: 'Running Data Quality Reports', script: '.\\JenkinsFile\\db\\gcis-data-quality-reports\\scripts\\executeDQReport.ps1'             
+                }
+                }    
+                stage("1. ST") {
+                when {  
+                    anyOf{
+                        environment name: 'ENVIRONMENT', value: 'ALL' 
+                        environment name: 'ENVIRONMENT', value: 'ST'              
+                    }
+                }                
+                environment {
+                        DB_CRED = credentials('GCM-ST-DB-ECMRW-RW')
+                        DB_CONN_STR = "${db_props['db.oracle.url.st']}"
+                        ENV = "ST"
+                }  
+                steps {
+                    powershell label: 'Running Data Quality Reports', script: '.\\JenkinsFile\\db\\gcis-data-quality-reports\\scripts\\executeDQReport.ps1'             
+                }                    
+                }   
+                stage("2. PT") {
+                when {  
+                    anyOf{
+                        environment name: 'ENVIRONMENT', value: 'ALL' 
+                        environment name: 'ENVIRONMENT', value: 'PT'                                      
+                    }
+                }      
+                environment {
+                        DB_CRED = credentials('GCM-PT-DB-ECMRW-RW')
+                        DB_CONN_STR = "${db_props['db.oracle.url.pt']}"
+                        ENV = "PT"
+                }  
+                steps {
+                    powershell label: 'Running Data Quality Reports', script: '.\\JenkinsFile\\db\\gcis-data-quality-reports\\scripts\\executeDQReport.ps1'             
+                }                  
+                }
+                stage("3. Regression") {
+                when {  
+                    anyOf{
+                        environment name: 'ENVIRONMENT', value: 'ALL' 
+                        environment name: 'ENVIRONMENT', value: 'REGR'              
+                    }
+                }      
+                environment {
+                        DB_CRED = credentials('GCM-REG-DB-ECMRW-RW')
+                        DB_CONN_STR = "${db_props['db.oracle.url.reg']}"
+                        ENV = "REGR"
+                }  
+                steps {
+                    powershell label: 'Running Data Quality Reports', script: '.\\JenkinsFile\\db\\gcis-data-quality-reports\\scripts\\executeDQReport.ps1'             
+                }                  
+                } 
+                stage("4. Production") {
+                when {  
+                    anyOf{
+                        environment name: 'ENVIRONMENT', value: 'ALL' 
+                        environment name: 'ENVIRONMENT', value: 'PROD'              
+                    }
+                }     
+                environment {
+                        DB_CRED = credentials('GCM-Prod-DB-readOnly')
+                        DB_CONN_STR = "${db_props['db.oracle.url.prod']}"
+                        ENV = "PROD"
+                }  
+                steps {
+                    powershell label: 'Running Data Quality Reports', script: '.\\JenkinsFile\\db\\gcis-data-quality-reports\\scripts\\executeDQReport.ps1'             
+                }                  
+                } 
+                stage("5. Break Fix") {
+                when {  
+                    anyOf{
+                        environment name: 'ENVIRONMENT', value: 'ALL' 
+                        environment name: 'ENVIRONMENT', value: 'BF'              
+                    }
+                }     
+                environment {
+                        DB_CRED = credentials('GCM-HF-DB-ECMRW-RW')
+                        DB_CONN_STR = "${db_props['db.oracle.url.bf']}"
+                        ENV = "BF"
+                }  
+                steps {
+                    powershell label: 'Running Data Quality Reports', script: '.\\JenkinsFile\\db\\gcis-data-quality-reports\\scripts\\executeDQReport.ps1'             
+                }                  
+                } 
+            }
+        }
+    }
+    post { 
+        always { 
+            //archiveArtifacts artifacts: 'JenkinsFile/gcis-data-quality-reports/sql/*.sql,JenkinsFile/gcis-data-quality-reports/sql-output/*.log,JenkinsFile/gcis-data-quality-reports/sql-trace/*.txt', followSymlinks: false
+            archiveArtifacts artifacts: 'JenkinsFile/db/gcis-data-quality-reports/sql-output/*.log,JenkinsFile/db/gcis-data-quality-reports/sql-output/*.xls,JenkinsFile/db/gcis-data-quality-reports/sql-output/*.html', followSymlinks: false
+            publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'JenkinsFile/db/gcis-data-quality-reports/sql-output', reportFiles: '*.html', reportName: "DQ-Report", reportTitles: "DQ Report - ${env.DQ_REPORT}"])
+        }
+        success {
+//            office365ConnectorSend color: '#00FF00', message: "Completed ${env.BRANCH_NAME} ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Success', webhookUrl: 'https://edisonintl.webhook.office.com/webhookb2/630eb4c3-e34b-45d7-a316-1948c49a2e3a@5b2a8fee-4c95-4bdc-8aae-196f8aacb1b6/JenkinsCI/344bf5a79c4a40aab31a313806126cbf/a3a8382e-c883-4ff6-8f7a-fe0862721a83',factDefinitions: [[name: "Build URL", template: "${env.BUILD_URL}"],[name: "DQ HTML Report", template: "${env.BUILD_URL}DQ-Report"]] 
+            office365ConnectorSend color: '#00FF00', message: "Completed ${env.JOB_NAME} [${env.BUILD_NUMBER}](${env.BUILD_URL})", status: 'Success', webhookUrl: "${getJenkinsWebhookURL()}",factDefinitions: [[name: "Build URL", template: "${env.BUILD_URL}"],[name: "DQ HTML Report", template: "[DQ Report - ${env.DQ_REPORT}](${env.BUILD_URL}DQ-Report)"]]            
+            }
+        failure{
+            office365ConnectorSend color: '#FF0000', message: "Completed ${env.BRANCH_NAME} ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Failure', webhookUrl: "${getJenkinsWebhookURL()}"
+        }
+    }
+}

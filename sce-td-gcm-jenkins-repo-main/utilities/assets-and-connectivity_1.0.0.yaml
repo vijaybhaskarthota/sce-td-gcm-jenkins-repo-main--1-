@@ -1,0 +1,142 @@
+apis:
+  circuitlist:
+    $ref: circuitlist_1.0.0.yaml
+  distributioncircuitconnectivity:
+    $ref: distributioncircuitconnectivity_1.0.0.yaml
+  metertogridhierarchy:
+    $ref: metertogridhierarchy_1.0.0.yaml
+  structurefeederinfo:
+    $ref: structurefeederinfo_1.0.0.yaml
+  substationchangelist:
+    $ref: substationchangelist_1.0.0.yaml
+  substationhierarchy:
+    $ref: substationhierarchy_1.0.0.yaml
+  substationinternalconnectivity:
+    $ref: substationinternalconnectivity_1.0.0.yaml
+  transformerloadpercentageservice:
+    $ref: transformerloadpercentageservice_1.0.0.yaml
+gateways:
+  - datapower-gateway
+info:
+  name: assets-and-connectivity
+  summary: >-
+    This Product provides the up-to-date, and end-to-end connectivity model of
+    the entire SCE grid for electrical, structural and communication networks. 
+
+
+    Please refer below link for high level changes: 
+
+
+    https://edisonintl.sharepoint.com/teams/Grid%20Modernization/GIS/Shared%20Documents/Forms/AllItems.aspx?csf=1&web=1&e=Vkyw1N&cid=b0f8184b%2Daab1%2D49ce%2D8709%2D44a5cb93448a&RootFolder=%2Fteams%2FGrid%20Modernization%2FGIS%2FShared%20Documents%2FGCM%20Release%20Notes&FolderCTID=0x012000D5F6176766C3F048A0BF901E6200847A
+  title: Assets and Connectivity
+  version: 1.0.0
+plans:
+  adms:
+    title: ADMS
+    rate-limits:
+      default:
+        value: unlimited
+    apis:
+      circuitlist: {}
+      distributioncircuitconnectivity: {}
+      metertogridhierarchy: {}
+      structurefeederinfo: {}
+      substationchangelist: {}
+      substationhierarchy: {}
+      substationinternalconnectivity: {}
+      transformerloadpercentageservice: {}
+  default:
+    title: Default Plan
+    description: Default Plan
+    rate-limits:
+      default:
+        value: unlimited
+    apis:
+      circuitlist: {}
+      distributioncircuitconnectivity: {}
+      metertogridhierarchy: {}
+      structurefeederinfo: {}
+      substationchangelist: {}
+      substationhierarchy: {}
+      substationinternalconnectivity: {}
+      transformerloadpercentageservice: {}
+  EPAS:
+    title: EPAS
+    description: Engineering Planning Analysis System
+    rate-limits:
+      default:
+        value: unlimited
+    apis:
+      circuitlist: {}
+      distributioncircuitconnectivity: {}
+      metertogridhierarchy: {}
+      structurefeederinfo: {}
+      substationchangelist: {}
+      substationhierarchy: {}
+      substationinternalconnectivity: {}
+      transformerloadpercentageservice: {}
+  orls:
+    title: ORLS
+    rate-limits:
+      default:
+        value: unlimited
+    apis:
+      circuitlist: {}
+      distributioncircuitconnectivity: {}
+      metertogridhierarchy: {}
+      structurefeederinfo: {}
+      substationchangelist: {}
+      substationhierarchy: {}
+      substationinternalconnectivity: {}
+      transformerloadpercentageservice: {}
+  Palantir:
+    title: Palantir
+    description: This Plan is created for Palantir
+    rate-limits:
+      default:
+        value: unlimited
+    apis:
+      circuitlist: {}
+      metertogridhierarchy: {}
+  Talend:
+    title: Talend
+    approval: true
+    rate-limits:
+      default:
+        value: unlimited
+    apis:
+      circuitlist: {}
+      distributioncircuitconnectivity: {}
+      metertogridhierarchy: {}
+      structurefeederinfo: {}
+      substationchangelist: {}
+      substationhierarchy: {}
+      substationinternalconnectivity: {}
+      transformerloadpercentageservice: {}
+  sappo:
+    title: SAPPO
+    approval: true
+    rate-limits:
+      default:
+        value: unlimited
+    apis:
+      circuitlist: {}
+      distributioncircuitconnectivity: {}
+      metertogridhierarchy: {}
+      structurefeederinfo: {}
+      substationchangelist: {}
+      substationhierarchy: {}
+      substationinternalconnectivity: {}
+      transformerloadpercentageservice: {}
+product: 1.0.0
+visibility:
+  subscribe:
+    enabled: true
+    type: authenticated
+    orgs: []
+    tags: []
+  view:
+    enabled: true
+    type: public
+    orgs: []
+    tags: []

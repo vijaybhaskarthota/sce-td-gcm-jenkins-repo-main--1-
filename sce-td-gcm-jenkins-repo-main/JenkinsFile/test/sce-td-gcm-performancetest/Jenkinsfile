@@ -1,0 +1,55 @@
+#!groovy
+pipeline {
+    agent any 
+//    parameters {
+   //    string(description: 'Test ID from Load Runner', name: 'Test_ID')
+//    }
+options {
+    office365ConnectorWebhooks([[name: "${env.JOB_NAME}", notifyAborted: true, notifyBackToNormal: true, notifyFailure: true, notifyNotBuilt: true, notifyRepeatedFailure: true, notifySuccess: true, notifyUnstable: true, startNotification: true, url: "${getJenkinsWebhookURL()}"]])
+    buildDiscarder logRotator(artifactDaysToKeepStr: '30', artifactNumToKeepStr: '30', daysToKeepStr: '30', numToKeepStr: '10')
+    //disableConcurrentBuilds()
+    timestamps()
+    timeout(time: 1, unit: 'HOURS')
+    copyArtifactPermission('/GCM/*')
+}
+stages{
+	stage('Initialize') { 
+            steps {  
+                script {  
+                    perftest_props = loadProperties("PerfTest") 
+                    cleanWs()
+                    checkout scm
+                    currentBuild.displayName = "#${env.BUILD_NUMBER} - ${env.ENVIRONMENT}"
+                }
+            }
+        }
+    stage("LR_PerfTest") {
+	environment {
+                     testID = "${perftest_props['Test_ID']}"
+                }  
+        steps{
+            script{
+	//	echo "${Test_ID}"
+		echo "${testID}"
+                pcRunBuild HTTPSProtocol: true, almDomain: 'DEFAULT', almProject: 'TD_Apps', authenticateWithToken: true, autoTestInstanceID: 'AUTO', credentialsId: 'blazemeter', credentialsProxyId: '', description: '', pcServerName: 'lre.sce.eix.com', postRunAction: 'COLLATE_AND_ANALYZE', proxyOutURL: '', retry: 'NO_RETRY', retryDelay: '5', retryOccurrences: '3', searchTimeslot: false, serverAndPort: 'https://jenkins.gmdevops.sce.com', statusBySLA: false, testContentToCreate: '', testId: "${testID}", testInstanceId: '', testToRun: 'EXISTING_TEST', timeslotDurationHours: '0', timeslotDurationMinutes: '30', trendReportId: '', trendReportWaitTime: '0', vudsMode: false
+                }
+            }
+    }
+    }
+ post { 
+     always { 
+         archiveArtifacts artifacts: '/*.*,/**/*.*', followSymlinks: false
+        // publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'TestReports', reportFiles: 'index.html', reportName: 'ReadyAPI Test Report', reportTitles: 'ReadyAPI Test Report'])
+        // junit skipMarkingBuildUnstable: true, testResults: '**/TEST*.xml'
+        collectPullRequestsToAlmOctane configurationId: 'cb826be3-f417-4ac7-81e5-eb62239438f0', credentialsId: 'git-svc-acct', repositoryUrl: "${env.GIT_URL}", scmTool: 'github_cloud', sourceBranchFilter: '', targetBranchFilter: '', workspaceId: '2001'     
+        collectBranchesToAlmOctane configurationId: 'cb826be3-f417-4ac7-81e5-eb62239438f0', credentialsId: 'git-svc-acct', filter: '', repositoryUrl: "${GIT_URL}", scmTool: 'github_cloud', workspaceId: '2001'
+     }
+     success {
+         office365ConnectorSend color: '#00FF00', message: "Completed ${env.BRANCH_NAME} ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Success', webhookUrl: "${getJenkinsWebhookURL()}"
+        // cleanWs()
+     }
+     failure{
+         office365ConnectorSend color: '#FF0000', message: "Completed ${env.BRANCH_NAME} ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Failure', webhookUrl: "${getJenkinsWebhookURL()}"
+     }
+ }
+}

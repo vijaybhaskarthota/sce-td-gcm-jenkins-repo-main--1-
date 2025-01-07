@@ -1,0 +1,158 @@
+column Category heading "Category" Format a51
+column COUNT heading "COUNT" Format a9
+column Comments heading "Comment" Format a10
+----circuit having transformer and unit with re-installed status (removed and instaleld)
+
+select '8.0:STR total count at source:' as Category, STR_COUNT AS COUNT,
+':Info' as Comments FROM (
+select count (DISTINCT STRUCTURE_NUMBER) as STR_COUNT from TCGACDS.GCM_V_M2G_TRANSFORMER_scim WHERE CIRCUIT_NAME1 IS NOT NULL  )
+
+UNION
+
+select '8.1:STR count in M2G FINAL:' as Category, STR_COUNT AS COUNT,
+':Info' as Comments FROM (
+SELECT COUNT(DISTINCT STRUCTURE_MRID) as STR_COUNT  FROM TCGACDS.gcm_scim_dist_structxfm_ds
+) 
+
+UNION
+
+--Count of distinct structure :::
+SELECT '8.11:STR active in M2G SCIM:' as category, COUNT (STRUCTURE_MRID),
+':Info' as Comments
+FROM(
+SELECT   distinct STRUCTURE_MRID  
+FROM TCGACDS.gcm_scim_dist_structxfm_ds
+where STRUCTURE_STATUS_VLU <>'REMOVED' 
+and TRANSFOMERBANK_STATUS_VLU  <> 'REMOVED'
+)
+
+UNION
+--Count of distinct structure ---
+SELECT '8.2:STR removed state in M2G SCIM' as category, COUNT (STRUCTURE_MRID),
+':Info' as Comments
+FROM(
+SELECT   distinct STRUCTURE_MRID  
+FROM TCGACDS.gcm_scim_dist_structxfm_ds
+where STRUCTURE_STATUS_VLU ='REMOVED' 
+and TRANSFOMERBANK_STATUS_VLU  ='REMOVED' 
+)
+
+
+UNION
+
+SELECT '8.3:STR count with TB KVA 0, NULL or Unknown:' as Category, COUNT(*) AS COUNT,
+CASE WHEN COUNT (*) > 0 THEN ':DQ Issue'
+ELSE 'Passed' END as Comments
+FROM (
+SELECT distinct STRUCTURE_MRID
+FROM TCGACDS.gcm_scim_dist_structxfm_ds where POWERTRANSFOMER_CIRCUITID  IS NOT NULL and 
+TRANSFORMERBANK_KVASIZE in (0, 'NULL', 'UNKNOWN')
+and TRANSFOMERBANK_STATUS_VLU  <> 'REMOVED'
+and STRUCTURE_STATUS_VLU  <> 'REMOVED'
+)
+
+UNION
+
+SELECT '8.31:STR count with TRU KVA null or unknown:' as Category, COUNT(*) AS COUNT,
+CASE WHEN COUNT (*) > 0 THEN ':DQ Issue'
+ELSE 'Passed' END as Comments
+FROM (
+SELECT distinct STRUCTURE_MRID
+FROM TCGACDS.gcm_scim_dist_structxfm_ds where POWERTRANSFOMER_CIRCUITID  IS NOT NULL and 
+POWERTRANSFOMERASSETINFO_KVASIZE  in ('NULL', 'UNKNOWN')
+and TRANSFOMERBANK_STATUS_VLU  <> 'REMOVED'
+and POWERTRANSFOMER_STATUS_VLU <>'REMOVED'
+and STRUCTURE_STATUS_VLU  <> 'REMOVED'
+)
+
+UNION
+
+SELECT '8.32:STR count with TRU KVA as 0:' as Category, COUNT(*) AS COUNT,
+CASE WHEN COUNT (*) > 0 THEN ':DQ Issue'
+ELSE 'Passed' END as Comments
+FROM (
+SELECT *
+FROM TCGACDS.gcm_scim_dist_structxfm_ds where 
+POWERTRANSFOMERASSETINFO_KVASIZE = '0'
+and TRANSFOMERBANK_STATUS_VLU  <> 'REMOVED'
+and POWERTRANSFOMER_STATUS_VLU <>'REMOVED'
+and STRUCTURE_STATUS_VLU  <> 'REMOVED'
+)
+
+UNION
+
+SELECT '8.4:STR count with TRU SerialNumber Null:' as Category, COUNT(*) AS COUNT,
+CASE WHEN COUNT (*) > 0 THEN ':DQ Issue'
+ELSE 'Passed' END as Comments
+FROM (
+SELECT distinct STRUCTURE_MRID
+FROM TCGACDS.gcm_scim_dist_structxfm_ds where POWERTRANSFOMER_CIRCUITID  IS NOT NULL 
+---and  TRANSFORMERBANK_KVASIZE in (0, 'NULL', 'UNKNOWN')
+AND POWERTRANSFOMERASSET_SERIALNUMBER is null
+and TRANSFOMERBANK_STATUS_VLU  <> 'REMOVED'
+and POWERTRANSFOMER_STATUS_VLU <>'REMOVED'
+and STRUCTURE_STATUS_VLU  <> 'REMOVED'
+)
+
+
+UNION
+
+SELECT '8.5:STR count having TransBank with no usagepoint:' as Category, COUNT(*) AS COUNT,
+':Info' as Comments
+FROM (
+
+SELECT  distinct ds.STRUCTURE_MRID
+FROM TCGACDS.gcm_scim_dist_structxfm_ds ds 
+LEFT JOIN  (select distinct TRANSFORMERBANK_MRID from TCGACDS.GCM_V_SCIM_DIST_USAGEPOINT_DS) UP  
+ON UP.TRANSFORMERBANK_MRID =ds.TRANSFORMERBANK_MRID
+where UP.TRANSFORMERBANK_MRID is NULL 
+and ds.TRANSFOMERBANK_STATUS_VLU  <> 'REMOVED'
+
+)
+
+UNION
+
+SELECT '8.6:STR with invalid TRU KVA, serialNum or usagepoint:' as Category, COUNT(DISTINCT STRUCTURE_MRID) AS COUNT,
+':Info' as Comments from (
+SELECT distinct STRUCTURE_MRID
+FROM TCGACDS.gcm_scim_dist_structxfm_ds where 
+POWERTRANSFOMERASSET_SERIALNUMBER is null
+and TRANSFOMERBANK_STATUS_VLU  <> 'REMOVED'
+and POWERTRANSFOMER_STATUS_VLU <>'REMOVED'
+and STRUCTURE_STATUS_VLU  <> 'REMOVED' union
+SELECT  distinct ds.STRUCTURE_MRID
+FROM TCGACDS.gcm_scim_dist_structxfm_ds ds 
+LEFT JOIN  (select distinct TRANSFORMERBANK_MRID from TCGACDS.GCM_V_SCIM_DIST_USAGEPOINT_DS) UP  
+ON UP.TRANSFORMERBANK_MRID =ds.TRANSFORMERBANK_MRID
+where UP.TRANSFORMERBANK_MRID is NULL 
+and ds.TRANSFOMERBANK_STATUS_VLU  <> 'REMOVED'
+and ds.POWERTRANSFOMER_STATUS_VLU <>'REMOVED'
+and ds.STRUCTURE_STATUS_VLU  <> 'REMOVED'
+union
+
+SELECT distinct STRUCTURE_MRID
+FROM TCGACDS.gcm_scim_dist_structxfm_ds where
+POWERTRANSFOMERASSETINFO_KVASIZE in ( 'NULL', 'UNKNOWN')
+and TRANSFOMERBANK_STATUS_VLU  <> 'REMOVED'
+and STRUCTURE_STATUS_VLU  <> 'REMOVED'
+and POWERTRANSFOMER_STATUS_VLU <>'REMOVED'
+)
+
+
+UNION
+
+SELECT '8.7:STR w/active TRU valid KVA,SerialNum,Usagepoint:' as Category, COUNT(*) AS COUNT,
+':Info' as Comments
+FROM (
+
+SELECT  distinct ds.STRUCTURE_MRID,STRUCTURE_STATUS_VLU
+FROM TCGACDS.gcm_scim_dist_structxfm_ds ds 
+INNER JOIN  (select TRANSFORMERBANK_MRID from TCGACDS.GCM_V_SCIM_DIST_USAGEPOINT_DS where METER_MRID IS NOT NULL group by TRANSFORMERBANK_MRID) UP  
+ON UP.TRANSFORMERBANK_MRID =ds.TRANSFORMERBANK_MRID
+where ds.POWERTRANSFOMERASSETINFO_KVASIZE NOT in ('NULL', 'UNKNOWN') 
+and ds.POWERTRANSFOMERASSET_SERIALNUMBER is NOT null
+and TRANSFOMERBANK_STATUS_VLU  <> 'REMOVED'
+and STRUCTURE_STATUS_VLU  <> 'REMOVED'
+and POWERTRANSFOMER_STATUS_VLU <>'REMOVED'
+
+);

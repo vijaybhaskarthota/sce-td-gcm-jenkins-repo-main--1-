@@ -1,0 +1,25 @@
+pipeline {
+    agent any
+    options {
+    buildDiscarder logRotator(artifactDaysToKeepStr: '30', artifactNumToKeepStr: '30', daysToKeepStr: '30', numToKeepStr: '30')
+    disableConcurrentBuilds()
+    timestamps()
+    }
+    stages {
+        stage('Initialize') { 
+            steps {
+                script{
+                    cleanWs()
+                    msp_props = loadProperties("MSP")
+                }
+            }
+        }
+        stage('Start Service') { 
+            steps {
+                script{
+                    powershell label: 'Tomcat Restart', script: "JenkinsFile/msp/server-validation/servervalidation.ps1 ${msp_props['server.nexus']},${msp_props['server.jenkins']}"
+                }
+            }
+        }
+    }
+}

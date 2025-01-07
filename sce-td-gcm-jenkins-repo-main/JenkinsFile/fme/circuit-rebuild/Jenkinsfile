@@ -1,0 +1,93 @@
+def executeFMEIfNotExecuting(String env, String fmeRepo, String fmeWorkspace, String publishedParameters){
+    def fme_util = new FMEUtils()
+    def isExecuting = fme_util.checkIfJobIsRunning("${env}","${fmeRepo}","${fmeWorkspace}")
+    if (isExecuting == false) {
+        echo "${env}_${fmeRepo}_${fmeWorkspace} - Executing"
+        fme_util.executeFME("${env}",  "${fmeRepo}",  "${fmeWorkspace}",  "${publishedParameters}")
+        echo "${env}_${fmeRepo}_${fmeWorkspace} - Completed"
+    } else {
+        echo "${env}_${fmeRepo}_${fmeWorkspace} - Job Is Already Running"
+    }
+}
+
+pipeline {
+    agent any 
+        parameters {
+            choice(name: 'ENVIRONMENT', choices: ['DEV','ST','PT','REGR','BF','PROD'], description: "Please specify Environment")
+            base64File(name: 'InputCSVFile',description: 'Please provide Circuit Input CSV file. Sample Template File: <a href=\"https://edisonintl.sharepoint.com/:x:/r/teams/GIS-IT/Shared%20Documents/Build/R6/CircuitRebuildTemplate/CircuitName.csv?d=wb1ed09cddfc94ce99bdfbbeb66334e53&csf=1&web=1&e=187G7a\">CircuitName.csv</a>')
+            
+        }
+        options {
+            office365ConnectorWebhooks([[name: "${env.JOB_NAME}", notifyAborted: true, notifyBackToNormal: true, notifyFailure: true, notifyNotBuilt: true, notifyRepeatedFailure: true, notifySuccess: true, notifyUnstable: true, startNotification: true, url: "${getJenkinsWebhookURL()}"]])
+            buildDiscarder logRotator(artifactDaysToKeepStr: '30', artifactNumToKeepStr: '30', daysToKeepStr: '30', numToKeepStr: '30')
+            disableConcurrentBuilds()
+            timestamps()
+        }
+    stages {
+        stage('Initialize') {
+            steps {
+                script{
+                    db_props = loadProperties("DB")                   
+                    db_util = new DBUtils()
+                }
+            }
+        }
+        stage('Pre Validation Job') { 
+            steps {
+                echo "Prevalidation Job"
+                build(propagate: false,job: "/GCM/Test/GCM-DataQualityReports", parameters: [string(name: 'ENVIRONMENT', value: "${ENVIRONMENT}"),string(name: 'DQ_REPORT', value: "CircuitRebuildPreValidation.sql")])
+            }
+        }
+        stage('Insert Circuit') { 
+            environment {
+                DB_CRED = credentials("${(db_util.getDBConnectionDetails("${ENVIRONMENT}",db_props)).DBCRED}")
+                DB_CONN_STR="${(db_util.getDBConnectionDetails("${ENVIRONMENT}",db_props)).CONNSTR}"
+                // DB_CRED = credentials("${db_util.getDBCredentials("${ENVIRONMENT}",db_props)}")
+                // DB_CONN_STR= db_util.getDBConnectionString("${ENVIRONMENT}",db_props)
+            }
+            steps {
+                script {
+                    withFileParameter('InputCSVFile'){
+                        echo "Input CSV File is : ${InputCSVFile}"
+                        def circuits = readCSV file: "${InputCSVFile}"
+                        circuits.eachWithIndex {
+                            circuit, index -> echo "Circuit:${index}:${circuit.values().first()}"
+                        }
+                        writeCSV file: 'CircuitName.csv', records: circuits
+                    }
+                }
+                powershell label: 'Executing Circuit Insert', script: '.\\JenkinsFile\\fme\\circuit-rebuild\\InsertCircuit.ps1'
+            }
+        }
+         stage('Rebuild Circuit') { 
+
+            steps {
+                script {
+                    executeFMEIfNotExecuting("${ENVIRONMENT}", "GCM_ADHOC", "Distribution_Primary_Load.fmw", "{\"publishedParameters\": [ { \"name\": \"BATCH_NO\", \"value\": \"9999\" } ] }")
+                    executeFMEIfNotExecuting("${ENVIRONMENT}", "CKT_GML_SERVICE", "GML_GEOJSON_CONTROLLER_DELTA.fmw", "{ \"publishedParameters\": [ { \"name\": \"COORDSYS\", \"value\": \"UTM83-11F\" }, { \"name\": \"GML_DESTINATION\", \"value\": \"import env_config as e \\n\\ne1=e.env() \nreturn e1.base_nas_path+\'\\\\CIRCUIT\\\\GML\'\" }, { \"name\": \"GEOJSON_DESTINATION\", \"value\": \"import env_config as e \\n\\ne1=e.env() \\nreturn e1.base_nas_path+\'\\\\CIRCUIT\\\\GEOJSON\'\" } ] }")
+
+                }      
+            }
+        }
+        stage('Post Validation Job') { 
+            steps {
+                echo "Post Validation Job"
+                build(propagate: false,job: "/GCM/Test/GCM-DataQualityReports", parameters: [string(name: 'ENVIRONMENT', value: "${ENVIRONMENT}"),string(name: 'DQ_REPORT', value: "CircuitRebuildPostValidation.sql")])
+            }
+        }
+   }
+    post { 
+        always { 
+            archiveArtifacts artifacts: '*.txt', followSymlinks: false
+            archiveArtifacts artifacts: '*.csv', followSymlinks: false
+            echo "Proceeding with Cleanup Activities"
+            cleanWs()
+        }
+        success {
+            office365ConnectorSend color: '#00FF00', message: "Completed ${env.BRANCH} ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Success', webhookUrl: "${getJenkinsWebhookURL()}"
+        }
+        failure{
+            office365ConnectorSend color: '#FF0000', message: "Completed ${env.BRANCH} ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Failure', webhookUrl: "${getJenkinsWebhookURL()}"
+        }
+    }
+}

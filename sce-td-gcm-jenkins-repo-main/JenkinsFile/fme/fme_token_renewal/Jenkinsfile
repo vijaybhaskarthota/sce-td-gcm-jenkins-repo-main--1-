@@ -1,0 +1,61 @@
+import java.text.SimpleDateFormat
+import net.sf.json.JSONObject
+// def ENVIRONMENT = ['DEV']
+//def ENVIRONMENT = ['DEV','ST','PT','REGR','BF']
+//disabling all env during development
+def ENVIRONMENT = ['PROD','DEV','ST','PT','REGR','BF']
+def FMETokenExtension(String env){
+    echo "Processing Token Refresh for ${env} - Started"
+    fmeUtils = new FMEUtils()
+    def tokens = fmeUtils.listAllTokens("${env}")
+    def CurrentDate = new Date()
+    tokens['items'].each { token ->
+        def expirationDate = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssX").parse("${token['expirationDate']}")                      
+        def currentDate = new Date()
+        def daysRemaining = (expirationDate - currentDate)
+        echo "Processing Token-Starting"
+        if (daysRemaining <7) {
+            echo "Processing Token expiring within 7 days:environment: ${env},name:${token['name']},type:${token['type']},user:${token['user']},expirationDate:${token['expirationDate']},description:${token['description']} Started"    
+            def updated_token = fmeUtils.updateToken("${env}",token)
+        }else{
+            echo "Token not expiring within 7 days:environment: ${env},name:${token['name']},type:${token['type']},user:${token['user']},expirationDate:${token['expirationDate']},description:${token['description']}:SKIPING"    
+        }
+        echo "Processing Token-Completed"
+    }  
+    echo "Processing Token Refresh for ${env} - Completed" 
+}
+pipeline {
+    agent any 
+        triggers {
+            // Add comment explaining below time.
+            cron('5 8 * * 7')
+        }
+        options {
+        office365ConnectorWebhooks([[name: "${env.JOB_NAME}", notifyAborted: true, notifyBackToNormal: true, notifyFailure: true, notifyNotBuilt: true, notifyRepeatedFailure: true, notifySuccess: true, notifyUnstable: true, startNotification: true, url: "${getJenkinsWebhookURL()}"]])
+        buildDiscarder logRotator(artifactDaysToKeepStr: '30', artifactNumToKeepStr: '30', daysToKeepStr: '30', numToKeepStr: '30')
+        disableConcurrentBuilds()
+        timestamps()
+        }
+        stages{
+        stage('FMETokenExtension') {
+            steps {
+                script {
+                    for (env in ENVIRONMENT){
+                        FMETokenExtension("${env}")
+                    }
+                }
+            }
+        }
+        }
+        post{ 
+            always { 
+                cleanWs()
+            }
+            success {
+                office365ConnectorSend color: '#00FF00', message: "Completed ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Success', webhookUrl: "${getJenkinsWebhookURL()}"
+            }
+            failure{
+                office365ConnectorSend color: '#FF0000', message: "Completed ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Failure', webhookUrl: "${getJenkinsWebhookURL()}"
+            }
+        }
+}

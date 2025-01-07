@@ -1,0 +1,81 @@
+#!groovy
+pipeline {
+    agent any 
+    parameters {
+      //choice(name: 'GCM_ENV', choices: ['DEV_NON_AGL','DEV_AGL','ST_NON_AGL','ST_AGL','PT','REGR','BF','PROD','EXADATA'], description: 'Environment')
+       choice(name: 'GCM_ENV', choices: ['DEV_v3','DEV_v3_MNT','DEV_v4','DEV_v5','ST_v3','ST_v3_MNT','ST_v4','ST_v5','PT_v3','PT_v3_MNT','PT_v4','PT_v5','REGR_v3','REGR_v3_MNT','REGR_v4','REGR_v5','BF_v3','BF_v3_MNT','BF_v4','BF_v5','PROD_v3','PROD_v3_MNT','PROD_v4','PROD_v5'], description: 'Environment')
+       choice(name: 'Test_Suite', choices: ['Sanity','Regression'], description: 'Test Suite')                                                                                                                                                                                                 
+       booleanParam(name: 'Security_Test', defaultValue: true, description: 'Do you want to execute Security Test?')                                           
+    }
+options {
+    office365ConnectorWebhooks([[name: "${env.JOB_NAME}", notifyAborted: true, notifyBackToNormal: true, notifyFailure: true, notifyNotBuilt: true, notifyRepeatedFailure: true, notifySuccess: true, notifyUnstable: true, startNotification: true, url: "${getJenkinsWebhookURL()}"]])
+    buildDiscarder logRotator(artifactDaysToKeepStr: '30', artifactNumToKeepStr: '30', daysToKeepStr: '30', numToKeepStr: '30')
+    // disableConcurrentBuilds()
+    timestamps()
+    timeout(time: 1, unit: 'HOURS')
+    copyArtifactPermission('/GCM/*')
+}
+stages{
+    stage("Ready API Test") {      
+        environment{
+            projectPassword=credentials('Test_Project_Password')
+        }    
+        steps{
+            script{
+                echo "Ready API Test for: ${GCM_ENV} -Started"
+               buildName "#${env.BUILD_NUMBER} - ${GCM_ENV} - ${Test_Suite}"  
+               testRunner='\"C:\\Program Files\\SmartBear\\ReadyAPI-3.52.0\\bin\\testrunner.bat\"'
+               testSuiteReport = '\"-RTestSuite Report\"'
+               echo "test suite is: ${Test_Suite}"
+             //  testSuite ="-T\"TestSuite ${Test_Suite}\""
+             // testSuite ="-TTestSuite ${Test_Suite}\" \"-TTestCase ${Test_Suite}"
+             // testSuite ="-T\"TestSuite ${Test_Suite}\"" "-T\"TestCase ${Test_Suite}\""
+            //    testSuite ="-T\"TestSuite ${Test_Suite}\" -T\"TestCase ${Test_Suite}\""
+               testSuite ="-T\"TestSuite ${Test_Suite}\""
+             // testSuite ="-TTestSuite ${Test_Suite}\"  \"-TTestCase ${Test_Suite}"
+               echo " testSuite Value is : ${testSuite}"
+               command = "${testRunner} -r -a -j -J -f${env.WORKSPACE}\\TestReports ${testSuiteReport} -FXML,PDF,HTML -E${GCM_ENV} ${testSuite} -GopPath=${env.WORKSPACE}\\TestReports\\ ${env.WORKSPACE} -x${projectPassword}"
+               returnStatus = bat label: 'Execute Ready API Test', returnStatus: true, script: "${command}"
+               if (returnStatus != 0) { currentBuild.result = 'FAILURE' }
+               echo "Ready API Test for: ${GCM_ENV} -Completed"
+                }
+            }
+    }
+    stage("Ready API Security Test") { 
+        when {  not {environment name: 'GCM_ENV', value: 'PROD'}
+        environment name: 'Security_Test', value: 'true' }   
+        steps{
+            script{
+                echo "Ready API Security Test for: ${GCM_ENV} -Started"
+                testRunner='\"C:\\Program Files\\SmartBear\\ReadyAPI-3.52.0\\bin\\securitytestrunner.bat\"'
+                testSuiteReport = '\"-RSecurityTest Report\"'
+                command = "${testRunner} -r -a -j -f${env.WORKSPACE}\\TestReports ${testSuiteReport} -FXML,PDF,HTML -E${GCM_ENV} -GopPath=${env.WORKSPACE}\\TestReports\\ ${env.WORKSPACE}"
+                returnStatus = bat label: 'Execute Ready API Security Test Report Generation', returnStatus: true, script: "${command}"
+                if (returnStatus != 0) { currentBuild.result = 'FAILURE' }
+                
+                testSuiteReport = '\"-RSecurity Issues Report\"'
+                command = "${testRunner} -r -a -j -f${env.WORKSPACE}\\TestReports ${testSuiteReport} -FXML,PDF,HTML -E${GCM_ENV} -GopPath=${env.WORKSPACE}\\TestReports\\ ${env.WORKSPACE}"
+                returnStatus = bat label: 'Execute Ready API Security Test Issue Report Generation', returnStatus: true, script: "${command}"
+                if (returnStatus != 0) { currentBuild.result = 'FAILURE' }                
+                echo "Ready API Security Test for: ${GCM_ENV}-Completed"
+                }
+            }               
+        }
+    }  
+post { 
+    always { 
+        archiveArtifacts artifacts: 'TestReports/*.*,TestReports/**/*.*', followSymlinks: false
+        publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'TestReports', reportFiles: 'index.html', reportName: 'ReadyAPI Test Report', reportTitles: 'ReadyAPI Test Report'])
+        junit skipMarkingBuildUnstable: true, testResults: '**/TEST*.xml'
+        collectPullRequestsToAlmOctane configurationId: 'cb826be3-f417-4ac7-81e5-eb62239438f0', credentialsId: 'git-svc-acct', repositoryUrl: "${env.GIT_URL}", scmTool: 'github_cloud', sourceBranchFilter: '', targetBranchFilter: '', workspaceId: '2001'     
+        collectBranchesToAlmOctane configurationId: 'cb826be3-f417-4ac7-81e5-eb62239438f0', credentialsId: 'git-svc-acct', filter: '', repositoryUrl: "${GIT_URL}", scmTool: 'github_cloud', workspaceId: '2001'
+    }
+    success {
+        office365ConnectorSend color: '#00FF00', message: "Completed ${env.BRANCH_NAME} ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Success', webhookUrl: "${getJenkinsWebhookURL()}"
+        cleanWs()
+    }
+    failure{
+        office365ConnectorSend color: '#FF0000', message: "Completed ${env.BRANCH_NAME} ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Failure', webhookUrl: "${getJenkinsWebhookURL()}"
+    }
+}
+}              

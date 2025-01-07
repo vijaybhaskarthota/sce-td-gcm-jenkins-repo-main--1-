@@ -1,0 +1,76 @@
+def sql_input_file
+def sql_output_file
+pipeline {
+    agent any 
+        parameters {
+            choice(name: 'ENVIRONMENT', choices: ['DEV','ST','PT','REGR','BF','PROD'], description: "Please specify Environment")
+            base64File(name: 'UserInputSQLfile',description: 'Please provide the SQL input file.')
+        }
+        options {
+            office365ConnectorWebhooks([[name: "${env.JOB_NAME}", notifyAborted: true, notifyBackToNormal: true, notifyFailure: true, notifyNotBuilt: true, notifyRepeatedFailure: true, notifySuccess: true, notifyUnstable: true, startNotification: true, url: "${getJenkinsWebhookURL()}"]])
+            buildDiscarder logRotator(artifactDaysToKeepStr: '30', artifactNumToKeepStr: '30', daysToKeepStr: '30', numToKeepStr: '30')
+            disableConcurrentBuilds()
+            timestamps()
+        }
+    stages {
+        stage('Initialize') {
+            steps {
+                script{
+                    db_props = loadProperties("DB")
+                    db_util = new DBUtils()
+                    release_props = loadProperties("RELEASE")
+                    if("PROD" == "${ENVIRONMENT}") {
+                        def permittedUsersInput = "${db_props['db.oracle.permitterusers.prod']}"
+                        echo "Approval is required for Production Deployment by ${permittedUsersInput} or DevSecOps Adminstrators"
+                        def approver= input id: 'AccessCheckID', message: 'Proceed with the execution in Prod', submitter: "${permittedUsersInput}", submitterParameter: 'approver'
+                        echo "Approval is provided for Production Deployment by: ${approver}"
+                        buildName "#${env.BUILD_NUMBER} - ${ENVIRONMENT} - ${release_props['gcm.release.prod.crq']}"  
+                    }
+                    else{
+                        buildName "#${env.BUILD_NUMBER} - ${ENVIRONMENT} - ${release_props['gcm.release.non_prod.crq']}"  
+                    }
+                }
+            }
+        }
+        stage('Process Input SQL file') {
+            steps { 
+                script { 
+                    withFileParameter('UserInputSQLfile'){
+                        def SQLFile = readFile "${UserInputSQLFile}"
+                        sql_input_file = "${UserInputSQLFile_FILENAME}"
+                        sql_output_file = "${sql_input_file}.output.sql"
+                        writeFile file: "${sql_input_file}", text: "${SQLFile}"
+                    }        
+                }
+            }
+        }
+        stage('SQL Execution') { 
+             environment {
+                DB_CRED = credentials("${(db_util.getDBConnectionDetails("${ENVIRONMENT}",db_props)).DBCRED}")
+                DB_CONN_STR="${(db_util.getDBConnectionDetails("${ENVIRONMENT}",db_props)).CONNSTR}"
+                SQL_INPUT_FILE = "${sql_input_file}"
+                SQL_OUTPUT_FILE = "${sql_output_file}"
+            }
+            steps { 
+                script {                
+                echo "Executing SQL Input File ${sql_input_file} using ${env:DB_CRED_USR}/${env:DB_CRED_PSW}${env:DB_CONN_STR} in ${ENVIRONMENT} environment"
+                powershell label: 'SQL Execution', script: 'sqlplus "$env:DB_CRED_USR/$env:DB_CRED_PSW$env:DB_CONN_STR" `@"$env:SQL_INPUT_FILE" | out-file "$env:SQL_OUTPUT_FILE"'
+                echo "SQL Execution Complete. SQL Input File:${SQL_INPUT_FILE}     SQL Output File:${SQL_OUTPUT_FILE}"
+                }
+            }
+        }
+
+    }
+    post { 
+        always { 
+            archiveArtifacts artifacts: '*.sql,*.txt', followSymlinks: false
+            cleanWs()
+        }
+        success {
+            office365ConnectorSend color: '#00FF00', message: "Completed ${env.BRANCH} ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Success', webhookUrl: "${getJenkinsWebhookURL()}"
+        }
+        failure{
+            office365ConnectorSend color: '#FF0000', message: "Completed ${env.BRANCH} ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Failure', webhookUrl: "${getJenkinsWebhookURL()}"
+        }
+    }
+}

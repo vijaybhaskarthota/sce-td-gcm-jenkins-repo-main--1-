@@ -1,0 +1,473 @@
+-- This report validates SFI from source to final and explains the reasons for the fallout with respect to SAP comparision
+-- Last Modified date: 10/10/2021
+-----------------------------------------------------------
+
+column Category heading "Category" Format a51
+column COUNT heading "COUNT" Format a9
+column Comments heading "Comment" Format a10
+-----------------
+
+select '1.00-GCM Distribution Circuit count' as Category,'-' as D, Count(FEEDER_CIRCUITID) as Count, '-Info' as Comments from (
+select distinct FEEDER_CIRCUITID from TCGACDS.GCM_STRUCTUREFEEDERINFO)
+
+UNION
+
+select '1.01-GCM Transmission Circuit count' as Category,'-' as D, Count(FEEDER_CIRCUITID) as Count, '-Info' as Comments from
+(select distinct FEEDER_CIRCUITID  from TCGACDS.GCM_STRUCTUREFEEDERINFO_SUBTRANS)
+
+UNION
+---GCM Pole count
+select '1.1-GCM Pole count' as Category,'-' as D, Count(structure_numbr) as Count, '-Info' as Comments from (
+select distinct structure_numbr from (
+select distinct STRUCTURE_NUMBR from TCGACDS.GCM_STRUCTUREFEEDERINFO
+union
+select DISTINCT STRUCTURE_NUMBR from TCGACDS.GCM_STRUCTUREFEEDERINFO_SUBTRANS
+
+) where STRUCTURE_NUMBR  in
+(select B.SCE_Structure_no from TCGACDS.SCE_EL_TRN_POLE B
+UNION select A.SCE_Structure_no from TCGACDS.EL_POLE A ) )
+
+UNION
+---POLE in SAP
+
+SELECT  '1.11-POLE in SAP' as Category,'-' as D, Count(DISTINCT SORT_FIELD) as Count, '-Info' as Comments  FROM 
+TCGACDS.ODS010_SAP_FLOC X WHERE X.OBJECT_TYPE in ( 'ED_POLE', 'ET_POLE', 'EZ_POLE')
+and ( sys_status = 'CRTE' or sys_status is null)----1365427
+
+UNION
+
+select '1.2-Total POLE count in GCM that present in SAP' as Category,'-' as D, Count(distinct structure_numbr) as Count, '-Info' as Comments from (
+
+select distinct structure_numbr from (
+select distinct STRUCTURE_NUMBR from TCGACDS.GCM_STRUCTUREFEEDERINFO
+union
+select DISTINCT STRUCTURE_NUMBR from TCGACDS.GCM_STRUCTUREFEEDERINFO_SUBTRANS
+
+) where STRUCTURE_NUMBR  in
+
+(select B.SCE_Structure_no from TCGACDS.SCE_EL_TRN_POLE B
+UNION select A.SCE_Structure_no from TCGACDS.EL_POLE A )
+
+and STRUCTURE_NUMBR in (
+
+SELECT  DISTINCT SORT_FIELD  FROM TCGACDS.ODS010_SAP_FLOC X WHERE X.OBJECT_TYPE in ( 'ED_POLE', 'ET_POLE', 'EZ_POLE')
+and ( sys_status = 'CRTE' or sys_status is null) 
+)
+)
+
+
+UNION
+
+
+
+select '1.21-ED POLE count in GCM that present in SAP' as Category,'-' as D, Count(distinct structure_numbr) as Count, '-Info' as Comments from (
+
+select distinct structure_numbr from (
+select distinct STRUCTURE_NUMBR from TCGACDS.GCM_STRUCTUREFEEDERINFO
+union
+select DISTINCT STRUCTURE_NUMBR from TCGACDS.GCM_STRUCTUREFEEDERINFO_SUBTRANS
+
+) where STRUCTURE_NUMBR  in
+
+(select B.SCE_Structure_no from TCGACDS.SCE_EL_TRN_POLE B
+UNION select A.SCE_Structure_no from TCGACDS.EL_POLE A )
+
+and STRUCTURE_NUMBR in (
+
+SELECT  DISTINCT SORT_FIELD  FROM TCGACDS.ODS010_SAP_FLOC X WHERE X.OBJECT_TYPE in ( 'ED_POLE')
+and ( sys_status = 'CRTE' or sys_status is null) 
+)
+)
+UNION
+
+select '1.22-ET POLE count in GCM that present in SAP' as Category,'-' as D, Count(distinct structure_numbr) as Count, '-Info' as Comments from (
+
+select distinct structure_numbr from (
+select distinct STRUCTURE_NUMBR from TCGACDS.GCM_STRUCTUREFEEDERINFO
+union
+select DISTINCT STRUCTURE_NUMBR from TCGACDS.GCM_STRUCTUREFEEDERINFO_SUBTRANS
+
+) where STRUCTURE_NUMBR  in
+
+(select B.SCE_Structure_no from TCGACDS.SCE_EL_TRN_POLE B
+UNION select A.SCE_Structure_no from TCGACDS.EL_POLE A )
+
+and STRUCTURE_NUMBR in (
+
+SELECT  DISTINCT SORT_FIELD  FROM TCGACDS.ODS010_SAP_FLOC X WHERE X.OBJECT_TYPE in ( 'ET_POLE')
+and ( sys_status = 'CRTE' or sys_status is null) 
+)
+)
+UNION
+select '1.23-EZ POLE count in GCM that present in SAP' as Category,'-' as D, Count(distinct structure_numbr) as Count, '-Info' as Comments from (
+
+select distinct structure_numbr from (
+select distinct STRUCTURE_NUMBR from TCGACDS.GCM_STRUCTUREFEEDERINFO
+union
+select DISTINCT STRUCTURE_NUMBR from TCGACDS.GCM_STRUCTUREFEEDERINFO_SUBTRANS
+
+) where STRUCTURE_NUMBR  in
+
+(select B.SCE_Structure_no from TCGACDS.SCE_EL_TRN_POLE B
+UNION select A.SCE_Structure_no from TCGACDS.EL_POLE A )
+
+and STRUCTURE_NUMBR in (
+
+SELECT  DISTINCT SORT_FIELD  FROM TCGACDS.ODS010_SAP_FLOC X WHERE X.OBJECT_TYPE in ( 'EZ_POLE')
+and ( sys_status = 'CRTE' or sys_status is null) 
+)
+)
+
+UNION
+------------POLE in SAP not in GCM'
+
+select '2.1-POLE in SAP not in GCM' as Category,  '-' as D, count(distinct SORT_FIELD ) as Count, '-Info' as Comments from (
+SELECT  DISTINCT SORT_FIELD  FROM TCGACDS.ODS010_SAP_FLOC X WHERE X.OBJECT_TYPE in ( 'ED_POLE', 'ET_POLE', 'EZ_POLE')
+and ( sys_status = 'CRTE' or sys_status is null)----1365427
+
+MINUS
+select distinct structure_numbr from (
+select distinct STRUCTURE_NUMBR from TCGACDS.GCM_STRUCTUREFEEDERINFO
+union
+select DISTINCT STRUCTURE_NUMBR from TCGACDS.GCM_STRUCTUREFEEDERINFO_SUBTRANS
+
+) where STRUCTURE_NUMBR  in
+(select B.SCE_Structure_no from TCGACDS.SCE_EL_TRN_POLE B
+UNION select A.SCE_Structure_no from TCGACDS.EL_POLE A ) 
+
+)
+
+
+UNION
+select '2.11-ED POLE in SAP not in GCM' as Category, '-' as D, count(distinct SORT_FIELD ) as Count, '-Info' as Comments from (
+SELECT  DISTINCT SORT_FIELD  FROM TCGACDS.ODS010_SAP_FLOC X WHERE X.OBJECT_TYPE in ( 'ED_POLE')
+and ( sys_status = 'CRTE' or sys_status is null)----1365427
+
+MINUS
+select distinct structure_numbr from (
+select distinct STRUCTURE_NUMBR from TCGACDS.GCM_STRUCTUREFEEDERINFO
+union
+select DISTINCT STRUCTURE_NUMBR from TCGACDS.GCM_STRUCTUREFEEDERINFO_SUBTRANS
+
+) where STRUCTURE_NUMBR  in
+(select B.SCE_Structure_no from TCGACDS.SCE_EL_TRN_POLE B
+UNION select A.SCE_Structure_no from TCGACDS.EL_POLE A ) 
+
+)
+
+UNION
+select '2.12-ET POLE in SAP not in GCM' as Category,  '-' as D, count(distinct SORT_FIELD ) as Count, '-Info' as Comments from (
+SELECT  DISTINCT SORT_FIELD  FROM TCGACDS.ODS010_SAP_FLOC X WHERE X.OBJECT_TYPE in ( 'ET_POLE')
+and ( sys_status = 'CRTE' or sys_status is null)----1365427
+
+MINUS
+select distinct structure_numbr from (
+select distinct STRUCTURE_NUMBR from TCGACDS.GCM_STRUCTUREFEEDERINFO
+union
+select DISTINCT STRUCTURE_NUMBR from TCGACDS.GCM_STRUCTUREFEEDERINFO_SUBTRANS
+
+) where STRUCTURE_NUMBR  in
+(select B.SCE_Structure_no from TCGACDS.SCE_EL_TRN_POLE B
+UNION select A.SCE_Structure_no from TCGACDS.EL_POLE A ) 
+
+)
+
+UNION
+select '2.13-EZ POLE in SAP not in GCM' as Category, '-' as D, count(distinct SORT_FIELD ) as Count, '-Info' as Comments from (
+SELECT  DISTINCT SORT_FIELD  FROM TCGACDS.ODS010_SAP_FLOC X WHERE X.OBJECT_TYPE in ( 'EZ_POLE')
+and ( sys_status = 'CRTE' or sys_status is null)----1365427
+
+MINUS
+select distinct structure_numbr from (
+select distinct STRUCTURE_NUMBR from TCGACDS.GCM_STRUCTUREFEEDERINFO
+union
+select DISTINCT STRUCTURE_NUMBR from TCGACDS.GCM_STRUCTUREFEEDERINFO_SUBTRANS
+
+) where STRUCTURE_NUMBR  in
+(select B.SCE_Structure_no from TCGACDS.SCE_EL_TRN_POLE B
+UNION select A.SCE_Structure_no from TCGACDS.EL_POLE A ) 
+
+)
+
+
+UNION
+
+ -----------ED POLE fallout reasons------------------------------
+ --Total fallout of ED_POLE =	75068
+ 
+ -- 1. No. of ED POLE from SAP not in  Map3d -- 29458, 4695 coming from GESW
+SELECT '2.14-ED POLE from SAP not in Map3D/GESW' as Category,'-' as D, Count(distinct SORT_FIELD)  as Count, '-Info' as Comments FROM
+TCGACDS.ODS010_SAP_FLOC X WHERE X.OBJECT_TYPE in ( 'ED_POLE')
+and ( sys_status = 'CRTE' or sys_status is null) 
+and  not exists (select B.SCE_Structure_no from TCGACDS.EL_POLE B where X.SORT_FIELD = B.SCE_Structure_no ) 
+and   not exists ( select STRUCTURE_NUMBER from TCGACDS.GCM_V_STRUCTURE_FEEDER C WHERE C.STRUCTURE_NUMBER=X.SORT_FIELD)
+
+--UNION
+-- -- 1. No. of ED POLE from SAP not in  Map3d --47075, 0
+--SELECT '2.15-ED POLE from SAP present in  Map3d not in SFI' as Category,'-' as D, Count( distinct SORT_FIELD) as Count, '-Info' as Comments FROM
+--TCGACDS.ODS010_SAP_FLOC X WHERE X.OBJECT_TYPE in ( 'ED_POLE')
+--and ( sys_status = 'CRTE' or sys_status is null) 
+--and sort_field not in (select distinct structure_numbr from (
+--select distinct STRUCTURE_NUMBR from TCGACDS.GCM_STRUCTUREFEEDERINFO
+--union select DISTINCT STRUCTURE_NUMBR from TCGACDS.GCM_STRUCTUREFEEDERINFO_SUBTRANS))
+--and  exists (select B.SCE_Structure_no from TCGACDS.EL_POLE B where X.SORT_FIELD = B.SCE_Structure_no ) --47075
+
+UNION
+
+SELECT '2.15-ED POLE from SAP/Map3D but not in STR Conn' as Category,'-' as D, Count(distinct SORT_FIELD) as Count, '-Info' as Comments FROM
+TCGACDS.ODS010_SAP_FLOC X WHERE X.OBJECT_TYPE in ( 'ED_POLE')
+and ( sys_status = 'CRTE' or sys_status is null) 
+and sort_field not in (select distinct structure_numbr from (
+select distinct STRUCTURE_NUMBR from TCGACDS.GCM_STRUCTUREFEEDERINFO
+union select DISTINCT STRUCTURE_NUMBR from TCGACDS.GCM_STRUCTUREFEEDERINFO_SUBTRANS))
+and  exists (select B.SCE_Structure_no from TCGACDS.EL_POLE B where X.SORT_FIELD = B.SCE_Structure_no ) --47075
+and not exists 
+( 
+select T1.STRUCTURE_NUMBER from (
+Select A1.FID_FROM AS STR_FID,A4.sce_structure_no AS STRUCTURE_NUMBER from TCGACDS.structural_conn A1, TCGACDS.EL_POLE A4
+Where (A4.FID=A1.FID_TO ) 
+UNION ALL
+Select A1.FID_To AS STR_FID,A4.sce_structure_no AS STRUCTURE_NUMBER from TCGACDS.structural_conn A1, TCGACDS.EL_POLE A4
+Where (A4.FID=A1.FID_FROM ) )T1 where X.SORT_FIELD = T1.STRUCTURE_NUMBER
+)
+
+
+-----------ET POLE fallout reason--------------------15944
+ UNION
+
+ 
+-- 1. No. of ET POLE from SAP not in  Map3d --6665
+ SELECT '2.16-ET POLE from SAP not in  Map3d' as Category,'-' as D, Count(distinct SORT_FIELD) as Count, '-Info' as Comments 
+ FROM TCGACDS.ODS010_SAP_FLOC X WHERE X.OBJECT_TYPE in ( 'ET_POLE')
+and ( sys_status = 'CRTE' or sys_status is null) and
+not exists (select B.SCE_Structure_no from TCGACDS.SCE_EL_TRN_POLE B where X.SORT_FIELD = B.SCE_Structure_no  )  
+
+UNION
+
+
+--2. ET POLE not in Structural connectivity --10153
+SELECT '2.17-ET POLE in Map3D not in STR Conn' as Category,'-' as D, Count(distinct SORT_FIELD) as Count, '-Info' as Comments FROM
+TCGACDS.ODS010_SAP_FLOC X WHERE X.OBJECT_TYPE in ( 'ET_POLE')
+and ( sys_status = 'CRTE' or sys_status is null) 
+and  not exists (select DISTINCT Y.STRUCTURE_NUMBR from TCGACDS.GCM_STRUCTUREFEEDERINFO_SUBTRANS Y  WHERE Y.STRUCTURE_NUMBR=X.SORT_FIELD)
+and exists (select B.SCE_Structure_no from TCGACDS.SCE_EL_TRN_POLE B where X.SORT_FIELD = B.SCE_Structure_no  )
+and not exists 
+( 
+select T1.STRUCTURE_NUMBER from (
+Select A1.FID_FROM AS STR_FID,A4.sce_structure_no AS STRUCTURE_NUMBER from TCGACDS.structural_conn A1, TCGACDS.EL_POLE A4
+Where (A4.FID=A1.FID_TO ) 
+UNION ALL
+Select A1.FID_To AS STR_FID,A4.sce_structure_no AS STRUCTURE_NUMBER from TCGACDS.structural_conn A1, TCGACDS.EL_POLE A4
+Where (A4.FID=A1.FID_FROM ) )T1 where X.SORT_FIELD = T1.STRUCTURE_NUMBER
+)
+and   not exists ( select STRUCTURE_NUMBER from TCGACDS.GCM_V_STRUCTURE_FEEDER C WHERE C.STRUCTURE_NUMBER=X.SORT_FIELD)
+
+
+UNION
+ -----------EZ POLE fallout reason-------------------- 	3731
+ 
+ --1. No. of EZ POLE from SAP not in  Map3d - 789
+SELECT '2.18-EZ POLE from SAP not in  Map3d' as Category,'-' as D, Count(distinct SORT_FIELD) as Count, '-Info' as Comments FROM TCGACDS.ODS010_SAP_FLOC 
+X WHERE X.OBJECT_TYPE in ( 'EZ_POLE')
+and ( sys_status = 'CRTE' or sys_status is null )
+and sort_field not in (select distinct structure_numbr from (
+select distinct STRUCTURE_NUMBR from TCGACDS.GCM_STRUCTUREFEEDERINFO
+union select DISTINCT STRUCTURE_NUMBR from TCGACDS.GCM_STRUCTUREFEEDERINFO_SUBTRANS))
+and not exists (
+select T.SCE_Structure_no from (select B.SCE_Structure_no from TCGACDS.SCE_EL_TRN_POLE B 
+union select B2.SCE_Structure_no from TCGACDS.EL_POLE B2 )T where X.SORT_FIELD = T.SCE_Structure_no ) --789
+and not exists ( select STRUCTURE_NUMBER from TCGACDS.GCM_V_STRUCTURE_FEEDER C WHERE C.STRUCTURE_NUMBER=X.SORT_FIELD) --789
+
+UNION
+
+--EZ POLE not in Structural connectivity  --2865
+SELECT '2.19-EZ POLE from SAP and Map3D not in STR Conn' as Category,'-' as D, Count(distinct SORT_FIELD) as Count, '-Info' as Comments FROM TCGACDS.ODS010_SAP_FLOC 
+X WHERE X.OBJECT_TYPE in ( 'EZ_POLE')
+and ( sys_status = 'CRTE' or sys_status is null )
+and sort_field not in (select distinct structure_numbr from (
+select distinct STRUCTURE_NUMBR from TCGACDS.GCM_STRUCTUREFEEDERINFO
+union select DISTINCT STRUCTURE_NUMBR from TCGACDS.GCM_STRUCTUREFEEDERINFO_SUBTRANS))
+and exists (select T.SCE_Structure_no from (select B.SCE_Structure_no from TCGACDS.SCE_EL_TRN_POLE B 
+union select B2.SCE_Structure_no from TCGACDS.EL_POLE B2 )T where X.SORT_FIELD = T.SCE_Structure_no )
+
+and not exists 
+( 
+select DISTINCT T1.STRUCTURE_NUMBER from (
+Select A1.FID_FROM AS STR_FID,A4.sce_structure_no AS STRUCTURE_NUMBER from TCGACDS.structural_conn A1, TCGACDS.EL_POLE A4
+Where (A4.FID=A1.FID_TO ) 
+UNION ALL
+Select A1.FID_To AS STR_FID,A4.sce_structure_no AS STRUCTURE_NUMBER from TCGACDS.structural_conn A1, TCGACDS.EL_POLE A4
+Where (A4.FID=A1.FID_FROM ) )T1 where X.SORT_FIELD = T1.STRUCTURE_NUMBER
+)
+
+UNION
+
+Select 
+---distinct T1.STRUCTURE_NUMBER
+'3.10-Other quality issue' as Category,'-' as D, Count(distinct T1.STRUCTURE_NUMBER) as Count, '-Info' as comments
+--distinct A1.FID as ELCon_FID, A2.fid_conductor, EC.FID as ELCkt_FID ,
+--T1.STRUCTURE_NUMBER --ec.sce_circuit_name,ec.sce_circuit_id
+from TCGACDS.el_conductor A1
+left join TCGACDS.el_segment_conductor A2
+on A1.FID=A2.fid_conductor
+left join TCGACDS.EL_CIRCUIT EC
+on EC.FID=a1.FID_CIRCUIT
+inner join ( Select A1.FID_FROM AS STR_FID,A4.sce_structure_no AS STRUCTURE_NUMBER from TCGACDS.structural_conn A1, TCGACDS.EL_POLE A4
+Where (A4.FID=A1.FID_TO )
+UNION ALL
+Select A1.FID_To AS STR_FID,A4.sce_structure_no AS STRUCTURE_NUMBER from TCGACDS.structural_conn A1, TCGACDS.EL_POLE A4
+Where (A4.FID=A1.FID_FROM )
+) T1
+on A2.FID_SEGMENT=T1.STR_FID
+----and ( A1.FID is null or A2.fid_conductor is null or EC.FID is null)
+where T1.STRUCTURE_NUMBER in (
+SELECT DISTINCT SORT_FIELD FROM TCGACDS.ODS010_SAP_FLOC X WHERE X.OBJECT_TYPE in ( 'ED_POLE', 'ET_POLE', 'EZ_POLE')
+and ( sys_status = 'CRTE' or sys_status is null)
+and not exists ( select STRUCTURE_NUMBER from TCGACDS.GCM_V_STRUCTURE_FEEDER C WHERE C.STRUCTURE_NUMBER=X.SORT_FIELD)
+AND A2.FID_SEGMENT IS NOT NULL AND EC.FID is NULL
+AND A1.FID_CIRCUIT IS NULL)
+
+UNION
+select '4.10-Total STR in GCM that active in SAP' as Category,'-' as D, Count(distinct structure_numbr) as Count, '-Info' as Comments from (
+
+select structure_numbr from (select distinct structure_numbr from (
+select distinct STRUCTURE_NUMBR from TCGACDS.GCM_STRUCTUREFEEDERINFO
+union select DISTINCT STRUCTURE_NUMBR from TCGACDS.GCM_STRUCTUREFEEDERINFO_SUBTRANS ) M
+where STRUCTURE_NUMBR  in (select B.SCE_Structure_no from TCGACDS.SCE_EL_TRN_POLE B
+UNION select A.SCE_Structure_no from TCGACDS.EL_POLE A )  ) N
+ where exists (
+
+SELECT  1 FROM TCGACDS.ODS010_SAP_FLOC X WHERE X.SORT_FIELD=N.STRUCTURE_NUMBR
+--and X.OBJECT_TYPE in
+---( 'ED_POLE', 'ET_POLE', 'EZ_POLE')
+and  (X.sys_status = 'CRTE' OR X.sys_status IS NULL)
+)
+
+)
+
+UNION
+
+select '4.11-Total STR in GCM that inactive in SAP' as Category,'-' as D, Count(distinct SORT_FIELD) as Count,
+'-Info' as Comments from  TCGACDS.ODS010_SAP_FLOC where sort_field in (
+
+select structure_numbr from (select distinct structure_numbr from (
+select distinct STRUCTURE_NUMBR from TCGACDS.GCM_STRUCTUREFEEDERINFO
+union select DISTINCT STRUCTURE_NUMBR from TCGACDS.GCM_STRUCTUREFEEDERINFO_SUBTRANS ) M
+where STRUCTURE_NUMBR  in (select B.SCE_Structure_no from TCGACDS.SCE_EL_TRN_POLE B
+UNION select A.SCE_Structure_no from TCGACDS.EL_POLE A )  ) N
+ where exists (
+
+SELECT  1 FROM TCGACDS.ODS010_SAP_FLOC X WHERE X.SORT_FIELD=N.STRUCTURE_NUMBR 
+--and X.OBJECT_TYPE in
+--( 'ED_POLE', 'ET_POLE', 'EZ_POLE')
+and  X.sys_status <> 'CRTE'
+)
+)
+UNION
+select '4.12-Total POLE in GCM that inactive in SAP' as Category,'-' as D, Count(distinct structure_numbr) as Count, '-Info' as Comments from (
+
+select structure_numbr from (select distinct structure_numbr from (
+select distinct STRUCTURE_NUMBR from TCGACDS.GCM_STRUCTUREFEEDERINFO
+union select DISTINCT STRUCTURE_NUMBR from TCGACDS.GCM_STRUCTUREFEEDERINFO_SUBTRANS ) M
+where STRUCTURE_NUMBR  in (select B.SCE_Structure_no from TCGACDS.SCE_EL_TRN_POLE B
+UNION select A.SCE_Structure_no from TCGACDS.EL_POLE A )  ) N
+ where exists (
+
+SELECT  1 FROM TCGACDS.ODS010_SAP_FLOC X WHERE X.SORT_FIELD=N.STRUCTURE_NUMBR and X.OBJECT_TYPE in
+( 'ED_POLE', 'ET_POLE', 'EZ_POLE')
+and  X.sys_status <> 'CRTE'
+)
+
+)
+UNION
+
+select '5.1-STR missing AOR info in SFI' as Category,'-' as D, Count(DISTINCT STRUCTURE_NUMBR) as Count, '-Info' as Comments from (
+select STRUCTURE_NUMBR, COUNT(*) from TCGACDS.GCM_STRUCTUREFEEDERINFO
+where TRANSMISSIONSYSTEM_NAME is  null group by  STRUCTURE_NUMBR
+UNION
+select STRUCTURE_NUMBR, COUNT(*) from TCGACDS.GCM_STRUCTUREFEEDERINFO_SUBTRANS
+where TRANSMISSIONSYSTEM_NAME is  null group by  STRUCTURE_NUMBR
+
+)
+
+UNION
+
+select '5.2-STR count where conductor missing phase info in SFI' as Category,'-' as D, Count(DISTINCT STRUCTURE_NUMBR) as Count, '-Info' as Comments from (
+select STRUCTURE_NUMBR, COUNT(*) from TCGACDS.GCM_STRUCTUREFEEDERINFO
+where ACLINESEGMENT_PHASES is  null group by  STRUCTURE_NUMBR 
+
+UNION
+
+select STRUCTURE_NUMBR, COUNT(*) from TCGACDS.GCM_STRUCTUREFEEDERINFO_SUBTRANS
+where ACLINESEGMENT_PHASES is  null group by  STRUCTURE_NUMBR 
+
+)
+
+UNION
+select '5.3-STR count where conductor missing Material info in SFI' as Category,'-' as D, Count(DISTINCT STRUCTURE_NUMBR) as Count, '-Info' as Comments from (
+select STRUCTURE_NUMBR, COUNT(*) from TCGACDS.GCM_STRUCTUREFEEDERINFO
+where CABLEASSETINFO_MATERIAL is  null group by  STRUCTURE_NUMBR 
+
+UNION
+select STRUCTURE_NUMBR, COUNT(*) from TCGACDS.GCM_STRUCTUREFEEDERINFO_SUBTRANS
+where CABLEASSETINFO_MATERIAL is  null group by  STRUCTURE_NUMBR 
+)
+
+
+
+UNION
+select '5.4-STR COUNT that belongs to multiple Circuit' as Category,'-' as D, Count(DISTINCT STRUCTURE_NUMBR) as Count, '-Info' as Comments from (
+select STRUCTURE_NUMBR, COUNT(DISTINCT  FEEDER_CIRCUITID) from TCGACDS.GCM_STRUCTUREFEEDERINFO 
+GROUP BY STRUCTURE_NUMBR HAVING COUNT(DISTINCT  FEEDER_CIRCUITID)>1
+
+UNION
+select STRUCTURE_NUMBR, COUNT(DISTINCT  FEEDER_CIRCUITID) from TCGACDS.GCM_STRUCTUREFEEDERINFO_SUBTRANS
+GROUP BY STRUCTURE_NUMBR HAVING COUNT(DISTINCT  FEEDER_CIRCUITID)>1
+
+)
+
+
+UNION
+select '5.5-STR COUNT that belongs to multiple Substation' as Category,'-' as D, Count(DISTINCT STRUCTURE_NUMBR) as Count, '-Info' as Comments from (
+select STRUCTURE_NUMBR, COUNT(DISTINCT  SUBSTATION_MRID) from TCGACDS.GCM_STRUCTUREFEEDERINFO 
+GROUP BY STRUCTURE_NUMBR HAVING COUNT(DISTINCT  SUBSTATION_MRID)>1
+
+UNION
+select STRUCTURE_NUMBR, COUNT(DISTINCT  SUBSTATION_MRID) from TCGACDS.GCM_STRUCTUREFEEDERINFO_SUBTRANS
+GROUP BY STRUCTURE_NUMBR HAVING COUNT(DISTINCT  SUBSTATION_MRID)>1
+
+)
+
+UNION
+
+Select '5.6-Duplicate Records in STRUCTUREFEEDERINFO' as Category,'-' as D, Count(*) as Count, '-Info' as Comments FROM (
+SELECT ACLINESEGMENT_ISOVERHEAD, ACLINESEGMENT_MRID, ACLINESEGMENT_PHASES, CABLEASSETINFO_MATERIAL, CABLEASSETINFO_MRID, DISTRICT_CODE, DISTRICT_MRID, FEEDER_CIRCUITID, FEEDER_CIRCUITNAME, FEEDER_CIRCUITNO, FEEDER_CIRCUITTYPE, FEEDER_INSERVICEDATE, FEEDER_MRID, FEEDER_OUTOFSERVICEDATE, FEEDER_STATUS_VLU, FEEDERIDENTIFIER_NAME, FEEDERIDENTIFIER_NAMETYPE, FEEDEROPINFO_MRID, FEEDEROPINFO_TYP, FEEDEROPINFO_UNITMULTIPLIER, FEEDEROPINFO_UNIT, FEEDEROPINFO_VLU, OVERHEADWIREASSETINFO_MATERIAL, OVERHEADWIREASSETINFO_MRID, REGION_MRID, REGION_NAME, STRUCTURE_MRID, STRUCTURE_NAME, STRUCTURE_NUMBR, SUBSTATION_MRID, SUBSTATION_NAME, SUBSTATION_NUMBR, SUBSTATION_SWITCHINGCENTERID, TRANSMISSIONSYSTEM_MRID, TRANSMISSIONSYSTEM_NAME, ZONE_MRID, ZONE_NAME, CABLEASSETINFO_STRANDCOUNT, CABLEASSETINFO_CONDUCTORCOUNT, CABLEASSETINFO_CORESTRANDCOUNT, OVERHEADWIREASSETINFO_CONDUCTORCOUNT, OVERHEADWIREASSETINFO_STRANDCOUNT, OVERHEADWIREASSETINFO_CORESTRANDCOUNT, SOR, SOR_ID,
+COUNT(STRUCTUREFEEDERINFOID) AS CNT FROM TCGACDS.GCM_STRUCTUREFEEDERINFO
+---WHERE STRUCTURE_NUMBR='929281E'
+GROUP BY 
+ACLINESEGMENT_ISOVERHEAD, ACLINESEGMENT_MRID, ACLINESEGMENT_PHASES, CABLEASSETINFO_MATERIAL, CABLEASSETINFO_MRID, DISTRICT_CODE, DISTRICT_MRID, FEEDER_CIRCUITID, FEEDER_CIRCUITNAME, FEEDER_CIRCUITNO, FEEDER_CIRCUITTYPE, FEEDER_INSERVICEDATE, FEEDER_MRID, FEEDER_OUTOFSERVICEDATE, FEEDER_STATUS_VLU, FEEDERIDENTIFIER_NAME, FEEDERIDENTIFIER_NAMETYPE, FEEDEROPINFO_MRID, FEEDEROPINFO_TYP, FEEDEROPINFO_UNITMULTIPLIER, FEEDEROPINFO_UNIT, FEEDEROPINFO_VLU, OVERHEADWIREASSETINFO_MATERIAL, OVERHEADWIREASSETINFO_MRID, REGION_MRID, REGION_NAME, STRUCTURE_MRID, STRUCTURE_NAME, STRUCTURE_NUMBR, SUBSTATION_MRID, SUBSTATION_NAME, SUBSTATION_NUMBR, SUBSTATION_SWITCHINGCENTERID, TRANSMISSIONSYSTEM_MRID, TRANSMISSIONSYSTEM_NAME, ZONE_MRID, ZONE_NAME, CABLEASSETINFO_STRANDCOUNT, CABLEASSETINFO_CONDUCTORCOUNT, CABLEASSETINFO_CORESTRANDCOUNT, OVERHEADWIREASSETINFO_CONDUCTORCOUNT, OVERHEADWIREASSETINFO_STRANDCOUNT, OVERHEADWIREASSETINFO_CORESTRANDCOUNT, SOR, SOR_ID
+
+HAVING COUNT(STRUCTUREFEEDERINFOID)>1 )
+
+UNION
+
+Select '5.7-Duplicate Records in STRUCTUREFEEDERINFO_SUBTRANS' as Category,'-' as D, Count(*) as Count, '-Info' as Comments FROM (
+SELECT ACLINESEGMENT_ISOVERHEAD, ACLINESEGMENT_MRID, ACLINESEGMENT_PHASES, CABLEASSETINFO_MATERIAL, CABLEASSETINFO_MRID, DISTRICT_CODE, DISTRICT_MRID, FEEDER_CIRCUITID, FEEDER_CIRCUITNAME, FEEDER_CIRCUITNO, FEEDER_CIRCUITTYPE, FEEDER_INSERVICEDATE, FEEDER_MRID, FEEDER_OUTOFSERVICEDATE, FEEDER_STATUS_VLU, FEEDERIDENTIFIER_NAME, FEEDERIDENTIFIER_NAMETYPE, FEEDEROPINFO_MRID, FEEDEROPINFO_TYP, FEEDEROPINFO_UNITMULTIPLIER, FEEDEROPINFO_UNIT, FEEDEROPINFO_VLU, OVERHEADWIREASSETINFO_MATERIAL, OVERHEADWIREASSETINFO_MRID, REGION_MRID, REGION_NAME, STRUCTURE_MRID, STRUCTURE_NAME, STRUCTURE_NUMBR, SUBSTATION_MRID, SUBSTATION_NAME, SUBSTATION_NUMBR, SUBSTATION_SWITCHINGCENTERID, TRANSMISSIONSYSTEM_MRID, TRANSMISSIONSYSTEM_NAME, ZONE_MRID, ZONE_NAME, CABLEASSETINFO_STRANDCOUNT, CABLEASSETINFO_CONDUCTORCOUNT, CABLEASSETINFO_CORESTRANDCOUNT, OVERHEADWIREASSETINFO_CONDUCTORCOUNT, OVERHEADWIREASSETINFO_STRANDCOUNT, OVERHEADWIREASSETINFO_CORESTRANDCOUNT, SOR, SOR_ID,
+COUNT(STRUCTUREFEEDERINFOID) AS CNT FROM TCGACDS.GCM_STRUCTUREFEEDERINFO_SUBTRANS
+---WHERE STRUCTURE_NUMBR='929281E'
+GROUP BY 
+ACLINESEGMENT_ISOVERHEAD, ACLINESEGMENT_MRID, ACLINESEGMENT_PHASES, CABLEASSETINFO_MATERIAL, CABLEASSETINFO_MRID, DISTRICT_CODE, DISTRICT_MRID, FEEDER_CIRCUITID, FEEDER_CIRCUITNAME, FEEDER_CIRCUITNO, FEEDER_CIRCUITTYPE, FEEDER_INSERVICEDATE, FEEDER_MRID, FEEDER_OUTOFSERVICEDATE, FEEDER_STATUS_VLU, FEEDERIDENTIFIER_NAME, FEEDERIDENTIFIER_NAMETYPE, FEEDEROPINFO_MRID, FEEDEROPINFO_TYP, FEEDEROPINFO_UNITMULTIPLIER, FEEDEROPINFO_UNIT, FEEDEROPINFO_VLU, OVERHEADWIREASSETINFO_MATERIAL, OVERHEADWIREASSETINFO_MRID, REGION_MRID, REGION_NAME, STRUCTURE_MRID, STRUCTURE_NAME, STRUCTURE_NUMBR, SUBSTATION_MRID, SUBSTATION_NAME, SUBSTATION_NUMBR, SUBSTATION_SWITCHINGCENTERID, TRANSMISSIONSYSTEM_MRID, TRANSMISSIONSYSTEM_NAME, ZONE_MRID, ZONE_NAME, CABLEASSETINFO_STRANDCOUNT, CABLEASSETINFO_CONDUCTORCOUNT, CABLEASSETINFO_CORESTRANDCOUNT, OVERHEADWIREASSETINFO_CONDUCTORCOUNT, OVERHEADWIREASSETINFO_STRANDCOUNT, OVERHEADWIREASSETINFO_CORESTRANDCOUNT, SOR, SOR_ID
+
+HAVING COUNT(STRUCTUREFEEDERINFOID)>1 )
+
+UNION
+
+select '5.8-SFI Record with Substation name null' as Category,'-' as D, Count(*) as Count, '-Info' as Comments from (
+Select STRUCTUREFEEDERINFOID FROM TCGACDS.GCM_STRUCTUREFEEDERINFO WHERE  SUBSTATION_NAME is NULL
+UNION
+Select STRUCTUREFEEDERINFOID FROM TCGACDS.GCM_STRUCTUREFEEDERINFO_SUBTRANS WHERE  SUBSTATION_NAME is NULL)
+
+;
+
+
+

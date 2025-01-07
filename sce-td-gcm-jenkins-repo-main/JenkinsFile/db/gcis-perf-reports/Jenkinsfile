@@ -1,0 +1,15 @@
+pipeline {
+    agent any
+    parameters {
+            choice(name: 'ENVIRONMENT', choices: ['DEV','ST','PT','REGR','BF','PROD'], description: "Please specify Environment")
+            base64File(name: 'UserInputSQLfile',description: 'Please provide the SQL input file.')
+        }
+
+    stages {
+        stage('Hello') {
+            steps {
+                echo 'Hello World'
+            }
+        }
+    }
+}

@@ -1,0 +1,73 @@
+def compareDatabases(String csvFilePath, String sourceDbUrl, String sourceDbUsername, String sourceDbPassword, String targetDbUrl, String targetDbUsername, String targetDbPassword, String resultCsvFilePath) {
+    def tableList = readCsvFile(csvFilePath)
+    
+    def sourceDbConnection = createDbConnection(sourceDbUrl, sourceDbUsername, sourceDbPassword)
+    def targetDbConnection = createDbConnection(targetDbUrl, targetDbUsername, targetDbPassword)
+    
+    def resultCsvFile = new File(resultCsvFilePath)
+    resultCsvFile << "Table Name,Source Rows,Target Rows,Difference\n"
+    
+    tableList.each { tableName ->
+        def sourceRowCount = getRowCount(sourceDbConnection, tableName)
+        def targetRowCount = getRowCount(targetDbConnection, tableName)
+        def difference = sourceRowCount - targetRowCount
+        
+        resultCsvFile << "$tableName,$sourceRowCount,$targetRowCount,$difference \n"
+    }
+    
+    sourceDbConnection.close()
+    targetDbConnection.close()
+}
+
+def readCsvFile(String csvFilePath) {
+    def tableList = []
+    
+    new File(csvFilePath).eachLine { line ->
+        tableList.add(line.trim())
+    }
+    
+    return tableList
+}
+
+def createDbConnection(String dbUrl, String username, String password) {
+    // Code to create a database connection using the provided URL, username, and password
+}
+
+def getRowCount(Connection dbConnection, String tableName) {
+    // Code to execute a SQL query and get the row count of the specified table
+}
+pipeline {
+    agent any
+    // define input parameter to choose two environments and a file parameter to upload the table list
+    parameters {
+        choice(name: 'sourceEnvironment', choices: ['DEV', 'ST', 'PT', 'REGR', 'BF', 'PROD'], description: 'Select the source environment')
+        choice(name: 'targetEnvironment', choices: ['DEV', 'ST', 'PT', 'REGR', 'BF', 'PROD'], description: 'Select the target environment')
+        file(name: 'tableList', description: 'Upload the table list CSV file')
+    }
+    
+    stages {
+        stage('Compare Databases') {
+            steps {
+                script {
+                    def tableList = readFile 'path/to/table_list.csv'
+                    def resultFile = 'path/to/result.csv'
+                    
+                    // Connect to the source and target databases
+                    
+                    // Iterate over the table list
+                    tableList.eachLine { tableName ->
+                        // Compare the tables and write the result to the result file
+                        // You can use any method or tool to compare the tables
+                        
+                        // Example using SQL queries
+                        def sourceResult = sh(script: "sqlplus -S user/password@source_db <<EOF\nSELECT * FROM ${tableName};\nEOF", returnStdout: true)
+                        def targetResult = sh(script: "sqlplus -S user/password@target_db <<EOF\nSELECT * FROM ${tableName};\nEOF", returnStdout: true)
+                        
+                        // Write the result to the CSV file
+                        writeFile file: resultFile, text: "${tableName},${sourceResult},${targetResult}\n", append: true
+                    }
+                }
+            }
+        }
+    }
+}

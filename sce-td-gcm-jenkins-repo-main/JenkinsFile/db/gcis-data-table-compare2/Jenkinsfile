@@ -1,0 +1,108 @@
+#!groovy
+def db_props
+String return_DB_CRED(String DB_ENV = 'DEV'){
+    def DB_CRED
+    echo "return_DB_CRED:Evaluating DB_CRED for DB Env: ${DB_ENV}"
+    switch("${DB_ENV}") {  
+        //DEV','ST','PT','REGR','BF','PROD'
+        case 'DEV': 
+            DB_CRED = "GCM-Non-ADMS-Dev-DB-TCGACDS-RW"                        
+            break; 
+        case 'ST': 
+            DB_CRED = "GCM-Non-ADMS-ST-DB-TCGACDS-RW"
+            break; 
+        case 'PT': 
+            DB_CRED = "GCM-PT-DB-TCGACDS-RW"
+            break; 
+        case 'REGR': 
+            DB_CRED = "GCM-REG-DB-TCGACDS-RW"
+            break;
+        case 'PROD': 
+            DB_CRED = "GCM-PROD-DB-TCGACDS-RW" 
+            break;       
+        case 'BF': 
+            DB_CRED = "GCM-BF-DB-TCGACDS-RW"
+            break;       
+    }
+    echo "return_DB_CRED:Evaluated DB_CRED for DB Env: ${DB_ENV}:${DB_CRED}"
+    return DB_CRED
+}
+String return_DB_CONN_STR(String DB_ENV = 'DEV'){
+    def DB_CONN_STR
+    echo "return_DB_CONN_STR:Evaluating DB_CONN_STR for DB Env: ${DB_ENV}"
+    switch("${DB_ENV}") {  
+        //DEV','ST','PT','REGR','BF','PROD'
+        case 'DEV': 
+            DB_CONN_STR = "db.oracle.url.dev"
+            break; 
+        case 'ST': 
+            DB_CONN_STR = "db.oracle.url.st"
+            break; 
+        case 'PT': 
+            DB_CONN_STR = "db.oracle.url.pt"
+            break; 
+        case 'REGR': 
+            DB_CONN_STR = "db.oracle.url.reg"
+            break;
+        case 'PROD': 
+            DB_CONN_STR = "db.oracle.url.prod"
+            break;       
+        case 'BF': 
+            DB_CONN_STR = "db.oracle.url.bf"
+            break;    
+    }
+    echo "return_DB_CONN_STR:Evaluated DB_CONN_STR for DB Env: ${DB_ENV}:${DB_CONN_STR}"
+    return DB_CONN_STR    
+}
+
+pipeline {
+    agent any 
+        options {
+        office365ConnectorWebhooks([[name: "${env.JOB_NAME}", notifyAborted: true, notifyBackToNormal: true, notifyFailure: true, notifyNotBuilt: true, notifyRepeatedFailure: true, notifySuccess: true, notifyUnstable: true, startNotification: true, url: "${getJenkinsWebhookURL()}"]])
+        buildDiscarder logRotator(artifactDaysToKeepStr: '30', artifactNumToKeepStr: '30', daysToKeepStr: '30', numToKeepStr: '30')
+        disableConcurrentBuilds()
+        timestamps()
+        copyArtifactPermission('/GCM/*')
+        }
+    stages {
+        stage('Initialize') { 
+            steps {  
+                script {  
+                    db_props = loadProperties("DB") 
+                    currentBuild.displayName = "#${env.BUILD_NUMBER} - ${env.Source_DB_Environment} - ${env.Target_DB_Environment} - TCGACDS Table Compare2"
+                    properties([ 
+                        parameters([
+                            choice(name: 'Source_DB_Environment', choices: ['DEV','ST','PT','REGR','BF','PROD'], description: 'Source DB Environment'),
+                            choice(name: 'Target_DB_Environment', choices: ['DEV','ST','PT','REGR','BF','PROD'], description: 'Target DB Environment'),
+                        ])
+                    ])
+                }
+            }
+        }
+        stage('GCM DB Table Compare2') {
+            environment {
+                SRC_DB_CRED = credentials("${return_DB_CRED("${Source_DB_Environment}")}")
+                TGT_DB_CRED = credentials("${return_DB_CRED("${Target_DB_Environment}")}")
+                SRC_DB_CONN_STR = "${db_props[return_DB_CONN_STR("${Source_DB_Environment}")]}"
+                TGT_DB_CONN_STR = "${db_props[return_DB_CONN_STR("${Target_DB_Environment}")]}"
+            }  
+            steps {
+                bat 'set'
+                powershell label: 'Running Table Comapre Script', script: '.\\JenkinsFile\\gcis-data-table-compare2\\scripts\\compareTables.ps1'             
+            }
+        }    
+    }
+    post { 
+        always { 
+            //archiveArtifacts artifacts: 'JenkinsFile/gcis-data-quality-reports/sql/*.sql,JenkinsFile/gcis-data-quality-reports/sql-output/*.log,JenkinsFile/gcis-data-quality-reports/sql-trace/*.txt', followSymlinks: false
+            archiveArtifacts artifacts: 'JenkinsFile/gcis-data-table-compare2/sql-output/*', followSymlinks: false
+        }
+        success {
+            office365ConnectorSend color: '#00FF00', message: "Completed ${env.BRANCH_NAME} ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Success', webhookUrl: "${getJenkinsWebhookURL()}"
+            cleanWs()
+        }
+        failure{
+            office365ConnectorSend color: '#FF0000', message: "Completed ${env.BRANCH_NAME} ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Failure', webhookUrl: "${getJenkinsWebhookURL()}"
+        }
+    }
+}

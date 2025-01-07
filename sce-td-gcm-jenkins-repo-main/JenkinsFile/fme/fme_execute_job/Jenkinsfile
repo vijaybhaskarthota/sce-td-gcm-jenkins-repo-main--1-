@@ -1,0 +1,114 @@
+
+def FME_REPOSITORY= ""
+def FME_WORKSPACE = ""
+def FME_PUBLISHEDPARAMETERS = ""
+
+def retriveFMERepositoryList(String env, FMEUtils fmeutil){
+    // def fmeutils = new FMEUtils()
+    echo "retriveFMERepositoryList: Environmemnt:${env}"
+    def repositoryList = fmeutil.retrieveFMERepository("${env}")
+    echo "retriveFMERepositoryList:Repositry List:${repositoryList}"
+    return repositoryList
+}
+def retriveFMEWorkspaceList(String env,String repository,FMEUtils fmeutil){
+    // def fmeutils = new FMEUtils()
+    echo "retriveFMEWorkspaceList: Environment:${env},Repository:${repository}"
+    def workspaceList = fmeutil.retrieveFMEWorkspace("${env}","${repository}")
+    echo "retriveFMEWorkspaceList:Workspace List:${workspaceList}"
+    return workspaceList
+}
+pipeline {
+    agent any 
+     parameters {  
+     choice (name: 'ENVIRONMENT', choices: ['DEV','ST','PT','REGR','BF','PROD'], description: 'Please choose Environment')     
+    }
+    options {
+    office365ConnectorWebhooks([[name: "${env.JOB_NAME}", notifyAborted: true, notifyBackToNormal: true, notifyFailure: true, notifyNotBuilt: true, notifyRepeatedFailure: true, notifySuccess: true, notifyUnstable: true, startNotification: true, url: "${getJenkinsWebhookURL()}"]])
+    buildDiscarder logRotator(artifactDaysToKeepStr: '30', artifactNumToKeepStr: '30', daysToKeepStr: '30', numToKeepStr: '30')
+    disableConcurrentBuilds()
+    timestamps()
+    }
+    stages {
+        stage('Initialize') {
+            steps { 
+                script{
+                    fmeutils = new FMEUtils()
+                    echo "inside Initialize Parameters"
+                    FME_REPOSITORY = input message: "Please Input FME Repo",id:'FME_REPO_SELECT1',ok: 'Select',parameters: [choice(name: 'FME_REPOSITORY_INPUT',   choices: script{retriveFMERepositoryList("${ENVIRONMENT}",fmeutils)}, description: 'Select FME Repository')]
+                    echo "Selected FME Repo is ${FME_REPOSITORY}"
+
+                    FME_WORKSPACE = input message: "Please Input FME Workspace",id:'FME_WORKSPACE_SELECT2',ok: 'Select',parameters: [choice(name: 'FME_WORKSPACE_INPUT',   choices: script{retriveFMEWorkspaceList("${ENVIRONMENT}", "${FME_REPOSITORY}",fmeutils)}, description: 'Select FME Workspace')]
+                    echo "Selected FME Workspace is ${FME_WORKSPACE}"
+
+                    samplePublishedParameters= fmeutils.retrieveFMEPublishedParameters("${ENVIRONMENT}","${FME_REPOSITORY}","${FME_WORKSPACE}")
+                    echo "sample publishedParameters is : ${samplePublishedParameters}"
+                    FME_PUBLISHEDPARAMETERS = input message: 'Please Enter Publish parameters.', ok: 'Submit', parameters: [string(description: "Sample Published Parameters for this job.<br> ${samplePublishedParameters}", name: 'FME_PublishedParameters_INPUT')]
+
+                    // if(FME_PUBLISHEDPARAMETERS==""){
+                    //     FME_PUBLISHEDPARAMETERS="{}"
+                    // }
+                    echo "Initialized Parameters:ENVIRONMENT:${ENVIRONMENT},FME_REPOSITORY:${FME_REPOSITORY},FME_WORKSPACE:${FME_WORKSPACE}, FME_PublishParameters: ${FME_PUBLISHEDPARAMETERS}"
+                }
+            }
+        }
+        stage('Execute FME') { 
+            steps {
+                script{
+                    buildName "#${env.BUILD_NUMBER} - ${ENVIRONMENT}"  
+                    fmeResult= fmeutils.executeFME("${ENVIRONMENT}","${FME_REPOSITORY}","${FME_WORKSPACE}","${FME_PUBLISHEDPARAMETERS}")
+                    // outputFileName = "FME_LOG_OUTPUT.txt"
+                    // writeFile file: "${outputFileName}", text: "BUILD_NAME: ${env.BUILD_NUMBER} - ${ENVIRONMENT} \nENVIRONMENT: ${ENVIRONMENT} \nFME_REPOSITORY: ${FME_REPOSITORY} \nFME_WORKSPACE: ${FME_WORKSPACE} \nFME_PublishedParameters: ${FME_PUBLISHEDPARAMETERS} \n${fmeResult}"
+                    echo "fmeResult::::: ${fmeResult}"
+                    echo "Execute FME is Completed"
+                    
+                // TestCase-executeFMECase: Rakesh: following 2 lines can be used if want to test submitting job.
+                    // fmeResult= fmeutils.executeFME("${ENVIRONMENT}","${FME_REPOSITORY}","${FME_WORKSPACE}","${FME_PUBLISHEDPARAMETERS}")
+                    // echo "TEST-fmeResult is : ${fmeResult}"
+
+                // TestCase-checkIfJobIsRunning
+                    // isExecutingResult= fmeutils.checkIfJobIsRunning("${ENVIRONMENT}","${FME_REPOSITORY}","${FME_WORKSPACE}")
+                    // outputFileName = "TestCase-checkIfJobIsRunning_OUTPUT.txt"
+                    // writeFile file: "${outputFileName}", text: "TEST-isExecutingResult_OUTPUT is : \n${isExecutingResult}"
+
+                // TestCase-checkExecutionStatus
+                    // jobStatus= fmeutils.checkJobStatus("${ENVIRONMENT}","777248")
+                    // outputFileName = "TestCase-checkExecutionStatus_OUTPUT.txt"
+                    // writeFile file: "${outputFileName}", text: "TEST-checkExecutionStatus_OUTPUT is : \n${jobStatus}"
+                    // echo ("TEST-jobStatus is : ${jobStatus}")
+
+                //  TestCase-downloadFMELog
+                    // fmeutils.downloadFMELog("${ENVIRONMENT}","852749","")
+                    // outputFileName = "TestCase-downloadFMELog_OUTPUT.txt"
+                    // writeFile file: "${outputFileName}", text: "TEST-downloadFMELog_OUTPUT is : \n${jobLog}"
+                    // new File("${outputFileName}") << "${jobLog}"
+                    // echo ("TEST-jobLog Completed")
+
+
+                // TestCase-getFMEEnironmentDetails
+                    // fmedetails =  fmeutils.getFMEEnvironmentDetails("${ENVIRONMENT}")
+                    // outputFileName = "TestCase-getFMEEnironmentDetails_OUTPUT.txt"
+                    // writeFile file: "${outputFileName}", text: "TEST-getFMEEnironmentDetails_OUTPUT is : \n${fmedetails}"
+
+                // TestCase-getFMEEnironmentDetails
+                    // fmedetails =  fmeutils.retrieveFMEPublishedParameters("${ENVIRONMENT}","GCM_R3_Workspace","GCM_FMW_INGEST_SCHEDULER.fmw")
+                    // outputFileName = "TestCase-retrieveFMEPublishedParameters_OUTPUT.txt"
+                    // writeFile file: "${outputFileName}", text: "TEST-retrieveFMEPublishedParameters_OUTPUT is : \n${fmedetails}"
+                }
+                
+            }
+        }
+   }
+    post { 
+        always {
+            archiveArtifacts artifacts: '*.txt', followSymlinks: false
+            echo "Proceeding with Cleanup Activities"
+            cleanWs()
+        }
+        success {
+            office365ConnectorSend color: '#00FF00', message: "Completed ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Success', webhookUrl: "${getJenkinsWebhookURL()}"
+        }
+        failure{
+            office365ConnectorSend color: '#FF0000', message: "Completed ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Failure', webhookUrl: "${getJenkinsWebhookURL()}"
+        }
+    }
+}

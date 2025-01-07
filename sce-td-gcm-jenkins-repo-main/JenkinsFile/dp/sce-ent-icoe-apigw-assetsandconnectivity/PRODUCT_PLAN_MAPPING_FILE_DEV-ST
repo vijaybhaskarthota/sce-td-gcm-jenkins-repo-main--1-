@@ -1,0 +1,24 @@
+product_url: https://api-manager-ui.apimst.sce.com/api/spaces/77b2a3d5-6670-476c-80ae-67447d436ead/aa076871-14a0-4424-bfe8-74bd7f8e8268/014c7fe0-faf2-4786-a128-4f9fb18e84fe/products/ce752589-acb8-41dc-953f-79e4cc2df352
+plans:
+- source: {CYME}
+  target: {CYME}
+- source: {Premium}
+  target: {Premium}
+- source: {iPEMS}
+  target: {iPEMS}
+- source: {adms}
+  target: {adms}
+- source: {default}
+  target: {default}
+- source: {gcm}
+  target: {gcm}
+- source: {EPAS}
+  target: {EPAS}
+- source: {orls}
+  target: {ORLs}
+- source: {Palantir}
+  target: {Palantir}
+- source: {Talend}
+  target: {Talend}
+- source: {sappo}
+  target: {SAPPO}        

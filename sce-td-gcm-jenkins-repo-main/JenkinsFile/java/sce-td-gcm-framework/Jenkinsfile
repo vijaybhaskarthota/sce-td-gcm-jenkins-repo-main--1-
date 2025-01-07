@@ -1,0 +1,102 @@
+#!groovy
+pipeline {
+    agent any 
+        parameters {
+        booleanParam(name: 'NexusReleasePackage', defaultValue: false, description: 'Do you want to create Nexus Release Package? Only Applicable for Release & Breakfix Branch.Please ensure developerVersion and releaseVersion are correctly set in Java Config file in Jenkins')
+    }
+    options {
+    office365ConnectorWebhooks([[name: "${env.JOB_NAME}", notifyAborted: true, notifyBackToNormal: true, notifyFailure: true, notifyNotBuilt: true, notifyRepeatedFailure: true, notifySuccess: true, notifyUnstable: true, startNotification: true, url: "${getJenkinsWebhookURL()}"]])
+    buildDiscarder logRotator(artifactDaysToKeepStr: '30', artifactNumToKeepStr: '30', daysToKeepStr: '30', numToKeepStr: '30')
+    disableConcurrentBuilds()
+    timestamps()
+    }
+    stages {
+        stage('Initialize') { 
+            steps {
+                script{
+                    java_props = loadProperties("JAVA")
+                    javaUtils = new JavaUtils()
+                    nexusUtils = new NexusUtils()
+                    readyAPIUtils = new ReadyAPIUtils()
+                }
+            }
+        }  
+        stage('Code Analysis, Deploy and Test in different Environments') {
+            environment {
+                db_driver = "${java_props['java.server.db_driver.all']}"
+                developerVersion="${java_props['java.framework.developer_version']}"
+                releaseVersion="${java_props['java.framework.release_version']}"
+            }            
+            parallel {
+                stage("ENV N/A") {
+                    when {  not { anyOf {                        
+                        branch 'R6.1-DEV';
+                        branch 'R6.1-REG';
+                //        branch 'master';        
+                        } } }
+                 
+                    stages{
+                        stage('Build, Code Analysis, Code Coverage') { 
+                             environment {
+                                db_url = "${java_props['java.server.db_url.dev']}"
+                                db_user = "${java_props['java.server.db_user.dev']}"  
+                            }
+                            steps {
+                                script{
+                              		javaUtils.executeJavaBuild() 
+                              	}
+                			}   
+                		}   
+                	}   
+                } 
+
+                stage("1. DEV"){
+                when {  branch "R6.1-DEV" }
+                    stages{
+                        stage('Build, Code Analysis, Code Coverage') {
+                            when {not {expression { params.DeployFromNexus} } } 
+                            steps {
+                                script{
+                                	javaUtils.executeJavaBuild()
+                                }
+               				}   
+                		}   
+                	}   
+                }
+
+                stage("3. Regression") {
+                when {  branch "R6.1-REG" }
+                    stages{
+                         stage('Build, Code Analysis, Code Coverage') {
+                            steps {
+                                script{
+                                    if (params.NexusReleasePackage) { 
+                                        echo "Nexus Release Package is true.Executing Java Release Build:releaseVersion:${releaseVersion},developerVersion:${developerVersion}"
+                                        javaUtils.executeJavaReleaseBuild()
+                                    }
+                                    else{
+                                        echo "Nexus Release Package is false.Executing Java Snapshot Build"
+                                        javaUtils.executeJavaBuild()
+                    				}   
+                    			}    
+                    		}   
+                    	}   
+                    }  
+                  }
+
+            }
+        }
+    }
+    
+    post{ 
+        always {
+            cleanWs()
+        }
+        success {
+            office365ConnectorSend color: '#00FF00', message: "Completed ${env.BRANCH_NAME} ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Success', webhookUrl: "${getJenkinsWebhookURL()}"
+        }
+        failure{
+            office365ConnectorSend color: '#FF0000', message: "Completed ${env.BRANCH_NAME} ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Failure', webhookUrl: "${getJenkinsWebhookURL()}"
+        }
+    }
+}

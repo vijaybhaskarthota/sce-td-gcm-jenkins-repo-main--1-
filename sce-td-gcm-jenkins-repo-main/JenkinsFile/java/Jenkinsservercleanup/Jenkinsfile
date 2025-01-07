@@ -1,0 +1,20 @@
+pipeline {
+    agent any
+    triggers {
+        cron('05 18 * * *')  //Run cleanup task at 1:00 AM every day
+        //cron('05 8 * * 0') //Run cleanup task at 8:05 AM every sunday(0 or 7 refers to sunday schedule)
+    }
+    stages {
+        stage('Cleanup') {
+            steps {
+                script {
+                    echo "Jenkins Server cleanup intializing"
+                    powershell  label: 'Jenkins server cleanup', 
+                    //script: 'Get-ChildItem -Path 'C:\Users\$gcmuserdev\AppData\Local\Temp' -Recurse | Where-Object {($_.LastWriteTime -lt (Get-Date).AddDays(-60))}|Remove-Item'
+                    script: "Get-ChildItem -Path 'C:\\Users\\\$gcmuserdev\\AppData\\Local\\Temp' -Recurse | Where-Object {(\$_.LastWriteTime -lt (Get-Date).AddDays(-60))}|Remove-Item -Recurse -Confirm:\$false -Force -Verbose"
+                    echo "Jenkins Server cleanup completed"
+                }
+            }
+        }
+    }
+}

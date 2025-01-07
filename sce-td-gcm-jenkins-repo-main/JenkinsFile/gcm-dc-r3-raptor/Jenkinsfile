@@ -1,0 +1,385 @@
+#!groovy
+def .net_props
+
+pipeline {
+    agent any 
+        parameters {
+        choice(name: 'NUM_OF_COMMIT', choices: ['DEV_NON_AGL','ST_NON_AGL','PROD',], description: 'Environment')
+        choice(name: 'ACTION', choices: ['INSTALL', 'ROLLBACK'], description: 'Select Action')
+        }
+        options {
+        office365ConnectorWebhooks([[name: "${env.JOB_NAME}", notifyAborted: true, notifyBackToNormal: true, notifyFailure: true, notifyNotBuilt: true, notifyRepeatedFailure: true, notifySuccess: true, notifyUnstable: true, startNotification: true, url: 'https://edisonintl.webhook.office.com/webhookb2/630eb4c3-e34b-45d7-a316-1948c49a2e3a@5b2a8fee-4c95-4bdc-8aae-196f8aacb1b6/JenkinsCI/344bf5a79c4a40aab31a313806126cbf/a3a8382e-c883-4ff6-8f7a-fe0862721a83']])
+        buildDiscarder logRotator(artifactDaysToKeepStr: '30', artifactNumToKeepStr: '30', daysToKeepStr: '30', numToKeepStr: '30')
+        disableConcurrentBuilds()
+        timestamps()
+        }
+    stages {
+        stage('Build') { 
+            steps {
+                script {
+                .net_props = loadProperties(".NET")
+                }
+                //powershell label: 'Generating install sql', script: '.\\CICD\\installscriptcreator.ps1'
+                //powershell label: 'Generating the rollback sql', script: '.\\CICD\\rollbackscriptcreator.ps1'
+                
+                collectBranchesToAlmOctane configurationId: 'cb826be3-f417-4ac7-81e5-eb62239438f0', credentialsId: 'git-svc-acct', filter: '', repositoryUrl: 'https://github.com/EdisonInternational/gcis-connectivity-oracle.git', scmTool: 'github_cloud', workspaceId: '2001'
+                collectPullRequestsToAlmOctane configurationId: 'cb826be3-f417-4ac7-81e5-eb62239438f0', credentialsId: 'git-svc-acct', repositoryUrl: 'https://github.com/EdisonInternational/gcis-connectivity-oracle.git', scmTool: 'github_cloud', sourceBranchFilter: '', targetBranchFilter: '', workspaceId: '2001'
+                archiveArtifacts artifacts: 'CICD/*.sql,CICD/*.log,*.log,output/*', followSymlinks: false
+            }
+        }
+        stage('Code Analysis, Deploy and Test in different Environments') {
+            environment {
+               // DEVOPS_DB_CRED = credentials('GCM-DEVOPS-DB-TCGACDS-RW')
+               // DEVOPS_DB_CONN_STR = "${db_props['db.oracle.url.devops']}"
+            } 
+            parallel {
+                stage("ENV N/A") {
+                when {  not { anyOf {
+                    branch 'Release-FEB-2023-DEV';
+                    branch 'master';
+                    branch 'Release-APR-2023-DEV';
+                    } } }
+                environment {
+                        DB_CRED = credentials('GCM-Non-ADMS-Dev-DB-TCGACDS-RW')
+                        DB_CONN_STR = "${db_props['db.oracle.url.dev']}"
+                }  
+                    stages{
+                        stage('Code Analysis'){
+                            steps {
+                                echo 'Code Analysis'
+                                powershell label: 'Running Code Analysis', script: '.\\CICD\\codeanalysis.ps1'             
+                            }
+                        }    
+                    
+                    }
+                }    
+                stage("0. Non Agile DEV") {
+                when { anyOf {  branch "Release-FEB-2023-DEV"; branch 'Release-APR-2023-DEV'; } }
+                environment {
+                        DB_CRED = credentials('GCM-Non-ADMS-Dev-DB-TCGACDS-RW')
+                        DB_CONN_STR = "${db_props['db.oracle.url.dev_agl']}"
+           
+                }  
+                    stages{
+                        stage('Code Analysis'){
+                            steps {
+                                echo 'Code Analysis'
+                                powershell label: 'Running Code Analysis', script: '.\\CICD\\codeanalysis.ps1'             
+                                echo 'Compare DB vs Git disabled'
+                                //powershell label: 'Running Compare DB vs Git', script: '.\\CICD\\compareDBvsGit_enhanced.ps1'             
+                                //powershell label: 'Running Compare DB vs Git', script: '.\\CICD\\compareDBvsGit.ps1'
+                                                                             
+                            }
+                        }    
+                        stage('Deploy') {       
+                            input { 
+                                message "Proceed with Deployment?"
+                                submitterParameter 'approver'
+                                ok 'Deploy' 
+                            }  
+                            steps {
+                                powershell label: 'Executing install/Rollback sql', script: '.\\CICD\\executescript.ps1'
+                                powershell label: 'trigger insert sql, ignore when not main branch', script: '.\\CICD\\insertdbscript.ps1'
+                                powershell label: 'Running compile script', script: '.\\CICD\\Compile.sql' 
+                                archiveArtifacts artifacts: 'CICD/*.sql,CICD/*.log,CICD/*.html,CICD/*.csv,CICD/*.txt,*.log,output/*', followSymlinks: false
+                                build propagate: false,job: '/GCM/DB/gcis-data-schema-compare', parameters: [string(name: 'Source_DB_Environment', value: 'DEV'), string(name: 'Target_DB_Environment', value: 'ST')]
+
+                            } 
+                            post {
+                                aborted{
+                                echo "Deploy stage has been aborted"
+                            }
+                            }    
+                        }      
+                        // stage('Test') { 
+                        //   steps {
+                        //       executeReadyAPITest('ALL','DEV_NON_AGL')                          
+                        //    }
+                       //  }                         
+                    }
+                }    
+
+                
+
+
+                stage("2. Non Agile ST") {
+                when { anyOf { branch "Release-FEB-2023-ST"; branch "Release-APR-2023-ST"; } }
+                environment {
+                        DB_CRED = credentials('GCM-Non-ADMS-ST-DB-TCGACDS-RW')
+                        DB_CONN_STR = "${db_props['db.oracle.url.st']}"
+              
+                }  
+                    stages{
+                        stage('Code Analysis'){
+                            steps {
+                                echo 'Code Analysis'
+                                powershell label: 'Running Code Analysis', script: '.\\CICD\\codeanalysis.ps1'     
+                                echo 'Compare DB vs Git disabled '
+                                //powershell label: 'Running Compare DB vs Git', script: '.\\CICD\\compareDBvsGit.ps1'             
+                            }
+                        }    
+                        stage('Deploy') {       
+                            input { 
+                                message "Proceed with Deployment?"
+                                submitterParameter 'approver'
+                                ok 'Deploy' 
+                            }  
+                            steps {
+                                powershell label: 'Executing install/Rollback sql', script: '.\\CICD\\executescript.ps1'
+                                powershell label: 'trigger insert sql, ignore when not main branch', script: '.\\CICD\\insertdbscript.ps1'
+                                powershell label: 'Running compile script', script: '.\\CICD\\Compile.sql' 
+                                archiveArtifacts artifacts: 'CICD/*.sql,CICD/*.log,CICD/*.html,CICD/*.csv,CICD/*.txt,*.log,output/*', followSymlinks: false
+                                         
+                            } 
+                            post {
+                                aborted{
+                                echo "Deploy stage has been aborted"
+                            }
+                            }    
+                        }      
+                        // stage('Test') { 
+                        //    steps 
+                        //        {
+                        //        executeReadyAPITest('ALL','ST_NON_AGL')   
+                        //        }
+                        // }                         
+                    }
+                }   
+
+                
+                stage("4. PT") {
+                when {  branch "Release-FEB-2023-PT" }
+                environment {
+                        DB_CRED = credentials('GCM-PT-DB-TCGACDS-RW')
+                        DB_CONN_STR = "${db_props['db.oracle.url.pt']}"
+                  
+                }  
+                    stages{
+                        stage('Code Analysis'){
+                            steps {
+                                echo 'Code Analysis'
+                                powershell label: 'Running Code Analysis', script: '.\\CICD\\codeanalysis.ps1'             
+                            }
+                        }    
+                        stage('Deploy') {       
+                            input { 
+                                message "Proceed with Deployment?"
+                                submitterParameter 'approver'
+                                ok 'Deploy' 
+                            }  
+                            steps {
+                                //echo "deployment not enabled"
+                                powershell label: 'Executing install/Rollback sql', script: '.\\CICD\\executescript.ps1'
+                                powershell label: 'trigger insert sql, ignore when not main branch', script: '.\\CICD\\insertdbscript.ps1'
+                                powershell label: 'Running compile script', script: '.\\CICD\\Compile.sql' 
+                                //call the schema comparte job with ST as source and PT as target
+                                //def jobResult=build propagate: false,job: "${jobName}", parameters: [string(name: 'GCM_ENV', value: "${env}")]
+                                archiveArtifacts artifacts: 'CICD/*.sql,CICD/*.log,CICD/*.html,CICD/*.csv,CICD/*.txt,*.log,output/*', followSymlinks: false
+                                build propagate: false,job: '/GCM/DB/gcis-data-schema-compare', parameters: [string(name: 'Source_DB_Environment', value: 'ST'), string(name: 'Target_DB_Environment', value: 'PT')]
+
+                            } 
+                            post {
+                                aborted{
+                                echo "Deploy stage has been aborted"
+                            }
+
+                            }
+
+                        }      
+                        //stage('Test') { 
+                        //    steps 
+                        //        {
+                        //       executeReadyAPITest('ALL','PT') 
+                        //       }                         
+                        // }
+                    }
+                }
+
+                stage("5. Regression") {
+                when {  branch "Release-FEB-2023" }
+                environment { 
+                        DB_CRED = credentials('GCM-REG-DB-TCGACDS-RW')
+                        DB_CONN_STR = "${db_props['db.oracle.url.reg']}"
+                      
+                }  
+                    stages{
+                        stage('Code Analysis'){
+                            steps {
+                                echo 'Code Analysis'
+                                powershell label: 'Running Code Analysis', script: '.\\CICD\\codeanalysis.ps1'  
+                                echo 'Compare DB vs Git disabled'
+                                //powershell label: 'Running Compare DB vs Git', script: '.\\CICD\\compareDBvsGit.ps1'             
+                            }
+                        }    
+                        stage('Deploy') {       
+                            input { 
+                                message "Proceed with Deployment?"
+                                ok 'Deploy' 
+                            }  
+                            steps {
+                                powershell label: 'Executing install/Rollback sql', script: '.\\CICD\\executescript.ps1'
+                                powershell label: 'Running compile script', script: '.\\CICD\\Compile.sql' 
+                                archiveArtifacts artifacts: 'CICD/*.sql,CICD/*.log,CICD/*.html,CICD/*.csv,CICD/*.txt,*.log,output/*', followSymlinks: false
+                                             
+                            } 
+                            post {
+                                aborted{
+                                echo "Deploy stage has been aborted"
+                            }
+                            }    
+                        }      
+                        //stage('Test') { 
+                        //    steps 
+                        //        {
+                        //        executeReadyAPITest('ALL','REGR') 
+                        //        }
+                        // }                         
+                    }
+                } 
+
+                stage("6. Production") {
+                when {  branch "master" }
+                environment {
+                        DB_CRED = credentials('GCM-PROD-DB-TCGACDS-RW')
+                        DB_CONN_STR = "${db_props['db.oracle.url.prod']}"
+                       
+                }  
+                    stages{
+                        stage('Code Analysis'){
+                            steps {
+                                echo 'Code Analysis'
+                                powershell label: 'Running Code Analysis', script: '.\\CICD\\codeanalysis.ps1'             
+                            }
+                        }    
+                        stage('Deploy') {       
+                            input { 
+                                message "Proceed with Deployment?"
+                                ok 'Deploy' 
+                            }  
+                            steps {
+                                
+                                 powershell label: 'Executing install/Rollback sql', script: '.\\CICD\\executescript.ps1'  
+                                 powershell label: 'Running compile script', script: '.\\CICD\\Compile.sql' 
+                                 archiveArtifacts artifacts: 'CICD/*.sql,CICD/*.log,CICD/*.html,CICD/*.csv,CICD/*.txt,*.log,output/*', followSymlinks: false
+                                
+                                
+                            } 
+                            post {
+                                aborted{
+                                echo "Deploy stage has been aborted"
+                            }
+                            }    
+                        }      
+                        //stage('Test') { 
+                        //    steps {
+                        //       executeReadyAPITest('ALL','PROD') 
+                               //build '../../Test/SubstationInternal_SmokeTest_NonADMS' 
+                                //echo "production tests not enabled"
+                        //    }
+                       // }                         
+                    }
+                } 
+
+                stage("7. Break Fix") {
+                when {  branch "breakfix" }
+                environment {
+                        DB_CRED = credentials('GCM-HF-DB-L982-TCGACDS-RW')
+                        DB_CONN_STR = "${db_props['db.oracle.url.bf']}"
+                   
+                }  
+                    stages{
+                        stage('Code Analysis'){
+                            steps {
+                                echo 'Code Analysis'
+                                powershell label: 'Running Code Analysis', script: '.\\CICD\\codeanalysis.ps1'             
+                            }
+                        }    
+                        stage('Deploy') {       
+                            input { 
+                                message "Proceed with Deployment?"
+                                ok 'Deploy' 
+                            }  
+                            steps {
+                                
+                                powershell label: 'Executing install/Rollback sql', script: '.\\CICD\\executescript.ps1'
+                                powershell label: 'Running compile script', script: '.\\CICD\\Compile.sql'  
+                                archiveArtifacts artifacts: 'CICD/*.sql,CICD/*.log,CICD/*.html,CICD/*.csv,CICD/*.txt,*.log,output/*', followSymlinks: false
+                                 
+                                             
+                            } 
+                            post {
+                                aborted{
+                                echo "Deploy stage has been aborted"
+                            }
+                            }    
+                        }      
+                       // stage('Test') { 
+                        //    steps 
+                        //        {
+                        //        executeReadyAPITest('ALL','BF') 
+                        //        }
+                       // }                         
+                    }
+                } 
+                //changes for devops dryrun (L986 DB)
+                stage("8. DEVOPS") {
+                when {  branch "devops" }
+                environment {
+                        DB_CRED = credentials('GCM-DEVOPS-DB-TCGACDS-RW')
+                        DB_CONN_STR = "${db_props['db.oracle.url.devops']}"
+                   
+                }  
+                    stages{
+                        stage('Code Analysis'){
+                            steps {
+                                echo 'Code Analysis'
+                                powershell label: 'Running Code Analysis', script: '.\\CICD\\codeanalysis.ps1'             
+                            }
+                        }    
+                        stage('Deploy') {       
+                            input { 
+                                message "Proceed with Deployment?"
+                                ok 'Deploy' 
+                            }  
+                            steps {
+                                
+                                powershell label: 'Executing install/Rollback sql', script: '.\\CICD\\executescript.ps1'
+                                powershell label: 'Running compile script', script: '.\\CICD\\Compile.sql'  
+                                archiveArtifacts artifacts: 'CICD/*.sql,CICD/*.log,CICD/*.html,CICD/*.csv,CICD/*.txt,*.log,output/*', followSymlinks: false
+                                 
+                                             
+                            } 
+                            post {
+                                aborted{
+                                echo "Deploy stage has been aborted"
+                            }
+                            }    
+                        }      
+                        //stage('Test') { 
+                        //    steps 
+                        //        {
+                        //        executeReadyAPITest('ALL','BF') 
+                        //        }
+                       // }                         
+                    }
+                }
+
+            }
+        }
+    }
+    post { 
+        always { 
+            archiveArtifacts artifacts: 'CICD/*.sql,CICD/*.log,CICD/*.html,CICD/*.csv,CICD/*.txt,*.log,output/*', followSymlinks: false
+            publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'output', reportFiles: 'CodeAnalysisReport.html', reportName: 'Code Analysis Report', reportTitles: 'CodeAnalysisReport'])
+            cleanWs()
+        } 
+        success {
+            office365ConnectorSend color: '#00FF00', message: "Completed ${env.BRANCH_NAME} ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Success', webhookUrl: 'https://edisonintl.webhook.office.com/webhookb2/630eb4c3-e34b-45d7-a316-1948c49a2e3a@5b2a8fee-4c95-4bdc-8aae-196f8aacb1b6/JenkinsCI/344bf5a79c4a40aab31a313806126cbf/a3a8382e-c883-4ff6-8f7a-fe0862721a83'
+        }
+        failure{
+            office365ConnectorSend color: '#FF0000', message: "Completed ${env.BRANCH_NAME} ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Failure', webhookUrl: 'https://edisonintl.webhook.office.com/webhookb2/630eb4c3-e34b-45d7-a316-1948c49a2e3a@5b2a8fee-4c95-4bdc-8aae-196f8aacb1b6/JenkinsCI/344bf5a79c4a40aab31a313806126cbf/a3a8382e-c883-4ff6-8f7a-fe0862721a83'
+        }
+
+
+    }
+}

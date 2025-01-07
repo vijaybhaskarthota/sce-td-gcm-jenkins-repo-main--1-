@@ -1,0 +1,390 @@
+def permittedUsersInput
+def intialInput() {
+    script{
+        def input1 = input message: "Proceed with stage: ${STAGE_NAME} ?", ok: 'Proceed',  parameters: [booleanParam(name: 'Skip', defaultValue: false, description: 'Skip and complete steps manually'),string(description: "Please provide comments", name: 'Comment')], submitter: "${env.permittedUsersInput}", submitterParameter: 'approver'
+        echo "Stage Name: ${STAGE_NAME} \nApprover: "+input1.approver+ "\nApprover Input Comments: "+input1.Comment+ "\nSkipping automated steps?: " +input1.Skip
+        return input1.Skip
+    }
+}
+
+def setBuildName(String prodCRQVal, String nonProdCRQVal) {    
+    script {
+        if("PROD" == "${ENVIRONMENT}") {
+            newBuildName="${env.BUILD_NUMBER} - ${ENVIRONMENT} - ${prodCRQVal}"
+        } else {
+           newBuildName="${env.BUILD_NUMBER} - ${ENVIRONMENT} - ${nonProdCRQVal}"
+        }
+        buildName "${newBuildName}"  
+    }
+}
+
+def getBranchName(String env) {
+    branchName=""
+    switch("${env}") {
+        case 'DEV': 
+        branchName="DEV" 
+        break;
+        case 'ST': 
+        branchName="ST"
+        break;
+        case 'PT': 
+        branchName="PT" 
+        break;
+        case 'REGR': 
+        branchName="REG" 
+        break;
+        case 'BF': 
+        branchName="STABLE" 
+        break;
+        case 'PROD': 
+        branchName="master" 
+        break;
+    }
+    echo "getBranchName - env is: ${env} - branchName is: ${branchName}"
+    return branchName
+}
+
+def getTestEnvironment(String env) {
+    testEnvironment=""
+    switch("${env}") {
+        case 'DEV':  
+        testEnvironment="DEV" 
+        break;
+        case 'ST':   
+        testEnvironment="ST"  
+        break;
+        case 'PT':   
+        testEnvironment="PT"  
+        break;
+        case 'REGR': 
+        testEnvironment="REGR"
+        break;
+        case 'PROD': 
+        testEnvironment="PROD" 
+        break;
+    }
+    echo "getTestEnvironment - env is: ${env} - testEnvironment is: ${testEnvironment}"
+    return testEnvironment
+}
+
+pipeline {
+    agent any              
+    environment {    
+        release_props= loadProperties("RELEASE")
+        testEnvironment=""
+        permittedUsersInput = "${release_props['gcm.release.permitterusers.nonprod']}"
+        nonProdBuildName= "${release_props['gcm.release.non_prod.crq']}"
+        prodbuildName= "${release_props['gcm.release.prod.crq']}"
+    }
+     parameters {  
+     choice (name: 'ENVIRONMENT', choices: ['DEV','ST','PT','REGR','BF','PROD'], description: 'Please choose Environment')
+     booleanParam(name: 'skipOutagePro', defaultValue: false, description: 'Do you want to skip Outage procedures?')
+     booleanParam(name: 'skipCoreDeployment', defaultValue: false, description: 'Do you want to skip Core deployment procedures?')
+     booleanParam(name: 'skipDistributionLoads', defaultValue: false, description: 'Do you want to skip Distribution Loads?')
+     booleanParam(name: 'skipSubstationLoads', defaultValue: false, description: 'Do you want to skip Substation Loads?')    
+    }
+    options {
+    office365ConnectorWebhooks([[name: "${env.JOB_NAME}", notifyAborted: true, notifyBackToNormal: true, notifyFailure: true, notifyNotBuilt: true, notifyRepeatedFailure: true, notifySuccess: true, notifyUnstable: true, startNotification: true, url: "${getJenkinsWebhookURL()}"]])
+    buildDiscarder logRotator(artifactDaysToKeepStr: '30', artifactNumToKeepStr: '30', daysToKeepStr: '30', numToKeepStr: '30')
+    disableConcurrentBuilds()
+    timestamps()
+    }
+    stages {
+        stage('GCM_Initiate_Outage_Procedures') { 
+            when {
+                not {
+                    expression { params.skipOutagePro }
+                } 
+            }  
+            parallel {
+                stage('DB_Pre-Deployment_Validation') { 
+                    steps { 
+                        script {   
+                            setBuildName("${prodbuildName}","${nonProdBuildName}")
+                            if(intialInput()) { 
+                                return 
+                            }
+                            def filePath = readFile "${WORKSPACE}/JenkinsFile/db/gcis-data-quality-reports/release61SQLs.txt"
+                            def sqlNames = filePath.readLines()
+                            for (sqlName in sqlNames) {
+                                jobResult = build propagate: false, wait: false,job: "/GCM/Test/GCM-DataQualityReports",parameters: [string(name: 'ENVIRONMENT', value: "${ENVIRONMENT}"),string(name: 'DQ_REPORT', value: "${sqlName}")]
+                            }
+                        }
+                    }
+                }   
+                stage('DP_Enable_GCM_Outage') {
+                    steps { 
+                        script {
+                            setBuildName("${prodbuildName}","${nonProdBuildName}")
+                            if(intialInput()){ 
+                                return 
+                            }
+                            branchName = getBranchName("${ENVIRONMENT}")
+                            jobResult = build propagate: false,job: "/GCM/DP/sce-ent-icoe-apigw-assetsandconnectivity/${branchName}",parameters: [string(name: 'NUM_OF_COMMIT', value: "1"),string(name: 'ACTION', value: "ENABLE_GCM_OUTAGE"),booleanParam(name: 'SkipTests', value: "true")]
+                        }
+                    }
+                }             
+                stage('Put_RedwoodJobs_on_hold') {
+                    steps { 
+                        script {   
+                            if(intialInput()){ 
+                                return 
+                            }
+                            // TODO: Please update Queue name 
+                            def jobResult=build propagate: false,job: "/GCM/Redwood/RedwoodQueueControl", parameters: [string(name: 'ENVIRONMENT', value: "${env}"),string(name: 'QUEUE_NAME', value: "GCM_Test_Queue"),string(name: 'ACTION', value: "HoldQueue")]                  
+                            echo "${STAGE_NAME} - ${jobResult.currentResult}"
+                            copyArtifacts fingerprintArtifacts: true, projectName: "/GCM/Redwood/RedwoodQueueControl", selector: specific("${jobResult.number}"), target: "./"
+                        }
+                    }
+                }
+                stage('GG,DP,DB,JAVA,FME_Prerequisite') {
+                    steps {
+                        script{
+                            if(intialInput()) { 
+                                return 
+                            }
+                            echo "${STAGE_NAME} - Stage needs mannual Execution"
+                        }
+                    }
+                }
+            }
+        }
+                
+        stage('GCM_Core_Deployments') {
+            when { 
+                not { 
+                    expression { params.skipCoreDeployment } 
+                } 
+            } 
+            steps { 
+                script {
+                    jobResult = build propagate: false,job: "/GCM/General/gcm-core-deployments" ,parameters: [string(name: 'ENVIRONMENT', value: "${ENVIRONMENT}")]         
+                }
+            }
+        }
+
+        stage('substation_DataLoad_Validations'){
+            when {
+                not {
+                    expression { params.skipSubstationLoads } 
+                } 
+            } 
+            steps { 
+                script {
+                    jobResult = build propagate: false,job: "/GCM/General/gcm-sub-data-loadAndValidations" ,parameters: [string(name: 'ENVIRONMENT', value: "${ENVIRONMENT}")] 
+                }
+            }
+        }
+
+        stage('Generate_AWR_Report_AND_GATHER_STATS') { 
+            steps { 
+                script {
+                    if(intialInput()) { 
+                        return 
+                    }
+                    echo "${STAGE_NAME} - Stage needs mannual Execution"
+                }
+            }
+        } 
+
+        stage('Generate_AWR_Report_Validation') { 
+            steps { 
+                script { 
+                    if(intialInput()) { 
+                        return 
+                    }          
+                    echo "${STAGE_NAME} -- Stage needs mannual Execution"
+                }
+            }
+        } 
+
+        stage('distribution_DataLoad_Validations') {
+            when { 
+                not {
+                    expression { params.skipDistributionLoads } 
+                } 
+            } 
+            steps { 
+                script {            
+                    jobResult = build propagate: false,job: "/GCM/General/gcm-dist-data-loadAndValidations" ,parameters: [string(name: 'ENVIRONMENT', value: "${ENVIRONMENT}")] 
+                }
+            }
+        }
+
+        stage('GCM_Service_Validation-MNT_URL_1') {             
+            when { 
+                not {
+                    expression { params.skipOutagePro } 
+                } 
+            } 
+            steps { 
+                script {
+                    if(intialInput()){ 
+                        return 
+                    }
+                    readyAPIUtils = new ReadyAPIUtils() 
+                    testEnv = getTestEnvironment("${ENVIRONMENT}")
+                    readyAPIUtils.executeReadyAPITest('ALL-Together',"${testEnv}_v3_MNT",false)
+                    readyAPIUtils.executeReadyAPITest('DC',"${testEnv}_v4_MNT",false)
+                    readyAPIUtils.executeReadyAPITest('DC',"${testEnv}_v5_MNT",false)
+                    readyAPIUtils.executeReadyAPITest('M2G',"${testEnv}_v4_MNT",false)
+                }
+            }
+        } 
+
+        stage('GG_Redwood_jobs') { 
+            when {
+                not {
+                    expression { params.skipOutagePro } 
+                } 
+            } 
+            parallel {
+                stage('Enable_GG') { 
+                    steps { 
+                        script {
+                            setBuildName("${prodbuildName}","${nonProdBuildName}")
+                            if(intialInput()) { 
+                                return 
+                            } 
+                        }
+                    }
+                }
+                stage('Resume_Redwood_Jobs') {
+                    steps { 
+                        script {
+                            if(intialInput()){ 
+                                return 
+                            }
+                            // TODO: Please update Queue name                         
+                            def jobResult=build propagate: false,job: "/GCM/Redwood/RedwoodQueueControl", parameters: [string(name: 'ENVIRONMENT', value: "${env}"),string(name: 'QUEUE_NAME', value: "GCM_Test_Queue"),string(name: 'ACTION', value: "ReleaseQueue")]                  
+                            echo "${STAGE_NAME} - ${jobResult.currentResult}"
+                            copyArtifacts fingerprintArtifacts: true, projectName: "/GCM/Redwood/RedwoodQueueControl", selector: specific("${jobResult.number}"), target: "./"
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('DB_Post-Deployment_Validation') { 
+            when {
+                not {
+                    expression { params.skipOutagePro } 
+                } 
+            } 
+            steps { 
+                script {  
+                    setBuildName("${prodbuildName}","${nonProdBuildName}")
+                    if(intialInput()) { 
+                        return 
+                    }
+                    def filePath = readFile "${WORKSPACE}/JenkinsFile/db/gcis-data-quality-reports/release61SQLs.txt"
+                    def sqlNames = filePath.readLines()
+                    for (sqlName in sqlNames) {
+                        jobResult = build propagate: false, wait: false,job: "/GCM/Test/GCM-DataQualityReports",parameters: [string(name: 'ENVIRONMENT', value: "${ENVIRONMENT}"),string(name: 'DQ_REPORT', value: "${sqlName}")]
+                    }
+                }
+            }
+        }
+
+        stage('GCM_ServiceValidation-MNT_URL_2') { 
+            when {
+                not {
+                    expression { params.skipOutagePro } 
+                } 
+            } 
+            steps { 
+                script {
+                    if(intialInput()){ 
+                        return 
+                    }
+                    readyAPIUtils = new ReadyAPIUtils()
+                    testEnv = getTestEnvironment("${ENVIRONMENT}")
+                    readyAPIUtils.executeReadyAPITest('ALL-Together',"${testEnv}_v3_MNT",false)
+                    readyAPIUtils.executeReadyAPITest('DC',"${testEnv}_v4_MNT",false)
+                    readyAPIUtils.executeReadyAPITest('DC',"${testEnv}_v5_MNT",false)
+                    readyAPIUtils.executeReadyAPITest('M2G',"${testEnv}_v4_MNT",false)
+                }
+            }
+        }
+
+        stage('Remove_GCM_Outage_DP') {
+            when {
+                not {
+                    expression { params.skipOutagePro } 
+                } 
+            } 
+            steps { 
+                script {
+                    branchName = getBranchName("${ENVIRONMENT}")
+                    if(intialInput()) { 
+                        return 
+                    }
+                    def jobResultRemoveOutage = build propagate: false,job: "/GCM/DP/sce-ent-icoe-apigw-assetsandconnectivity/${branchName}",parameters: [string(name: 'NUM_OF_COMMIT', value: "1"),string(name: 'ACTION', value: "REMOVE_GCM_OUTAGE"),booleanParam(name: 'SkipTests', value: "true")]
+                }
+            }
+        }
+
+        stage('GCM_Service_Validation_MainURL') { 
+            steps { 
+                script { 
+                    if(intialInput()) { 
+                        return 
+                    }
+                    readyAPIUtils = new ReadyAPIUtils()
+                    testEnv = getTestEnvironment("${ENVIRONMENT}")
+                    readyAPIUtils.executeReadyAPITest('ALL-Together',"${testEnv}_v3",true)
+                    readyAPIUtils.executeReadyAPITest('DC',"${testEnv}_v4",true)
+                    readyAPIUtils.executeReadyAPITest('DC',"${testEnv}_v5",true)
+                    readyAPIUtils.executeReadyAPITest('M2G',"${testEnv}_v4",true)
+                }
+            }
+        }
+
+        stage('GCM_PIV') { 
+            when {
+                not {
+                    expression { params.skipOutagePro } 
+                } 
+            } 
+            steps { 
+                script{ 
+                    if(intialInput()) { 
+                        return 
+                    }                       
+                    echo "${STAGE_NAME} -Stage Needs Manual Execution"   
+                }
+            }
+        }
+
+        stage('GCM_Consumers_PIV') { 
+            when {
+                not {
+                    expression { params.skipOutagePro } 
+                } 
+            } 
+            steps { 
+                script {     
+                    if(intialInput()) { 
+                        return 
+                    }                   
+                    echo "${STAGE_NAME} -Stage Needs Manual Execution"   
+                }
+            }
+        }
+
+    }
+    post { 
+        always { 
+            archiveArtifacts artifacts: '*.txt', followSymlinks: false
+            setBuildName("${prodbuildName}","${nonProdBuildName}")
+            echo "Proceeding with Cleanup Activities"
+            cleanWs()
+        }
+        success {
+            office365ConnectorSend color: '#00FF00', message: "Completed ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Success', webhookUrl: "${getJenkinsWebhookURL()}",factDefinitions: [[name: "Build URL", template: "${env.BUILD_URL}"]]
+        }
+        failure{
+            office365ConnectorSend color: '#FF0000', message: "Completed ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Failure', webhookUrl: "${getJenkinsWebhookURL()}",factDefinitions: [[name: "Build URL", template: "${env.BUILD_URL}"]]
+        }
+    }
+}

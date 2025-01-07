@@ -1,0 +1,221 @@
+def permittedUsersInput
+def intialInput(){
+    script{
+        def input1 = input message: "Proceed with stage: ${STAGE_NAME} ?", ok: 'Proceed',  parameters: [booleanParam(name: 'Skip', defaultValue: false, description: 'Skip and complete steps manually'),string(description: "Please provide comments", name: 'Comment')], submitter: "${env.permittedUsersInput}", submitterParameter: 'approver'
+        echo "Stage Name: ${STAGE_NAME} \nApprover: "+input1.approver+ "\nApprover Input Comments: "+input1.Comment+ "\nSkipping automated steps?: " +input1.Skip
+        return input1.Skip
+}}
+def setBuildName(String prodCRQVal, String nonProdCRQVal){    
+    script{
+        if("PROD" == "${ENVIRONMENT}") {
+            newBuildName="${env.BUILD_NUMBER} - ${ENVIRONMENT} - ${prodCRQVal}"
+        }else{
+           newBuildName="${env.BUILD_NUMBER} - ${ENVIRONMENT} - ${nonProdCRQVal}"
+        }
+        buildName "${newBuildName}"  
+}}
+def fmeExecution(String repo, String workspace, String publishParas){
+    try{          
+        def fmeutils = new FMEUtils()
+        def fmeResult=fmeutils.executeFME("${ENVIRONMENT}", "${repo}", "${workspace}", "${publishParas}")
+        fmeutils.downloadFMELog("${ENVIRONMENT}","${fmeResult['id']}","${STAGE_NAME}")
+        // outputFileName = "${STAGE_NAME}_FME_OUTPUT.txt"
+        // writeFile file: "${outputFileName}", text: "BUILD_NAME: ${env.BUILD_NUMBER} - ${ENVIRONMENT} \nSTAGE_NAME: ${STAGE_NAME} \nFME_REPOSITORY: ${repo} \nFME_WORKSPACE: ${workspace} \nFME_PublishedParameters: ${publishParas} \nFME Result :\n${fmeResult} \nFME Log :\n${fmeLog}"
+        archiveArtifacts artifacts: '*.txt', followSymlinks: false
+        
+    }catch (Exception excep){
+        echo "${STAGE_NAME} -Exception: ${excep}"
+}}
+// def getBranchName(String env){
+//     branchName=""
+//     switch("${env}") {
+//         case 'DEV': 
+//         branchName="R6.1-DEV"  
+//         break;
+//         case 'ST': branchName="R6.1-ST"  
+//         break;
+//         case 'PT': branchName="R6.1-PT"  
+//         break;
+//         case 'REGR': branchName="R6.1-REG" 
+//         break;
+//         case 'PROD': branchName="master" 
+//         break;
+//     }
+//     echo "getBranchName - env is: ${env} - branchName is: ${branchName}"
+//     return branchName
+// }
+
+pipeline {
+    agent any              
+    environment {    
+        release_props= loadProperties("RELEASE")
+        permittedUsersInput = "${release_props['gcm.release.permitterusers.nonprod']}"
+        nonProdBuildName= "${release_props['gcm.release.non_prod.crq']}"
+        prodbuildName= "${release_props['gcm.release.prod.crq']}"
+    }          
+    options {
+        office365ConnectorWebhooks([[name: "${env.JOB_NAME}", notifyAborted: true, notifyBackToNormal: true, notifyFailure: true, notifyNotBuilt: true, notifyRepeatedFailure: true, notifySuccess: true, notifyUnstable: true, startNotification: true, url: "${getJenkinsWebhookURL()}"]])
+        buildDiscarder logRotator(artifactDaysToKeepStr: '30', artifactNumToKeepStr: '30', daysToKeepStr: '30', numToKeepStr: '30')
+        disableConcurrentBuilds()
+        timestamps()
+    }
+    parameters {  
+     choice (name: 'ENVIRONMENT', choices: ['DEV','ST','PT','REGR','BF','PROD'], description: 'Please choose Environment') 
+    }  
+    stages {
+                
+       
+        stage('S_Load_Parallel_Procedures')  {
+            // when {not {expression { params.skipSubstationLoads} } } 
+            parallel{
+                stage('S-THR_Load') { 
+                    steps{ script{
+                        setBuildName("${prodbuildName}","${nonProdBuildName}")
+                        if(intialInput()){ return }
+                        fmeExecution("GCM_Workspace", "GCM_FMW_THR_PROCESSOR.fmw", "")
+                }}}                
+                stage('S-ASPEN_dataLoad') { 
+                    steps{ script{
+                        if(intialInput()){ return }
+                        fmeExecution("GCM_Workspace", "GCM_FMW_ASPEN_PROCESSOR.fmw", "")
+                }}}               
+                stage('S-DVVC_dataLoad') { 
+                    steps{ script{
+                        if(intialInput()){ return }
+                        fmeExecution("GCM_Workspace", "GCM_FMW_VREG_LINE_DATA.fmw", "")
+                }}}                   
+                stage('S-RedBook_dataLoad_optional') { 
+                    steps{ script{
+                        if(intialInput()){ return }
+                        fmeExecution("GCM_Workspace", "REDBOOK_INGESTION_CONTROLLER.fmw", "{ \"publishedParameters\": [ { \"name\": \"SOR\", \"value\": ['ALL'] } ] }")
+                }}}                  
+                stage('MFL_dataLoad_optional') { 
+                    steps{ script{
+                        if(intialInput()){ return }
+                        fmeExecution("GCM_Workspace", "GCM_MFL_CONTROLLER.fmw", "")
+        }}}}}
+     
+        stage('S_Validation_Parallel_Procedures'){
+            // when {not {expression { params.skipSubstationLoads} } } 
+            parallel{
+                stage('S-THR_Load_Validation') { 
+                    steps{ script{  
+                        if(intialInput()){ return }                      
+                        jobResult = build propagate: false,job: "/GCM/Test/GCM-DataQualityReports",parameters: [string(name: 'ENVIRONMENT', value: "${ENVIRONMENT}"),string(name: 'DQ_REPORT', value: "THR_Validation_Script.sql")] 
+                 }}}    
+                stage('S-ASPEN_dataLoad_Validation') { 
+                    steps{ script{        
+                        if(intialInput()){ return }                
+                        
+                         jobResult = build propagate: false,job: "/GCM/Test/GCM-DataQualityReports",parameters: [string(name: 'ENVIRONMENT', value: "${ENVIRONMENT}"),string(name: 'DQ_REPORT', value: "ASPEN_Validation.sql")]
+                }}} 
+                stage('S-DVVC_dataLoad_Validation') { 
+                    steps{ script{
+                            if(intialInput()){ return }                        
+                            
+                             jobResult = build propagate: false,job: "/GCM/Test/GCM-DataQualityReports",parameters: [string(name: 'ENVIRONMENT', value: "${ENVIRONMENT}"),string(name: 'DQ_REPORT', value: "DVVC_Validation_Script.sql")]                    
+                }}}  
+                stage('S-RedBook_dataLoad_optional_Validation') { 
+                    steps{ script{
+                            if(intialInput()){ return } 
+                             jobResult = build propagate: false,job: "/GCM/Test/GCM-DataQualityReports",parameters: [string(name: 'ENVIRONMENT', value: "${ENVIRONMENT}"),string(name: 'DQ_REPORT', value: "Redbook_Report_for_Substation_master_branch.sql")]
+                }}}
+                stage('MFL_dataLoad_optional_Validation') { 
+                    steps{ script{
+                            if(intialInput()){ return }  
+                            jobResult = build propagate: false,job: "/GCM/Test/GCM-DataQualityReports",parameters: [string(name: 'ENVIRONMENT', value: "${ENVIRONMENT}"),string(name: 'DQ_REPORT', value: "MFL_VALIDATION.sql")]
+        }}}}}
+        stage('S-RDF_Load_Process_PreValidation') { 
+            // when {not {expression { params.skipSubstationLoads} } } 
+            steps{ script{ 
+                    jobResult = build propagate: false,job: "/GCM/Test/GCM-DataQualityReports",parameters: [string(name: 'ENVIRONMENT', value: "${ENVIRONMENT}"),string(name: 'DQ_REPORT', value: "EMS_RDF_prevalidation_script.sql")]                    
+        }}}
+        stage('S-RDF_Load_Process') { 
+            // when {not {expression { params.skipSubstationLoads} } } 
+            steps{ script{
+                setBuildName("${prodbuildName}","${nonProdBuildName}")
+                if(intialInput()){ return }
+                //takes around 1-2 hrs
+                fmeExecution( "GCM_Workspace", "GCM_FMW_INGEST_SCHEDULER.fmw", "") 
+                //takes around 1-2 hrs
+                fmeExecution( "GCM_Workspace", "GCM_FMW_EMS_HIER.fmw", "")
+                //takes around 1-2 hrs
+                fmeExecution( "GCM_Workspace", "GCM_FMW_CHNG_HIER.fmw", "")
+        }}}  
+        stage('S-RDF_Load_Process_PostValidation') { 
+            // when {not {expression { params.skipSubstationLoads} } } 
+            steps{ script{                        
+                    jobResult = build propagate: false,job: "/GCM/Test/GCM-DataQualityReports",parameters: [string(name: 'ENVIRONMENT', value: "${ENVIRONMENT}"),string(name: 'DQ_REPORT', value: "SI_Validation_Script.sql")]
+                    
+        }}}               
+        stage('S-GE_SmallWorld_Load_Validation') { 
+            // when {not {expression { params.skipSubstationLoads} } } 
+            steps{ script{                        
+                    jobResult = build propagate: false,job: "/GCM/Test/GCM-DataQualityReports",parameters: [string(name: 'ENVIRONMENT', value: "${ENVIRONMENT}"),string(name: 'DQ_REPORT', value: "Net_table_Distribution_Report_master_branch.sql")]
+                    jobResult = build propagate: false,job: "/GCM/Test/GCM-DataQualityReports",parameters: [string(name: 'ENVIRONMENT', value: "${ENVIRONMENT}"),string(name: 'DQ_REPORT', value: "Net_table_Substation_Report_master_branch.sql")]
+                    
+        }}}
+          
+        stage('S_GeosptialGML_Load') { 
+            // when {not {expression { params.skipSubstationLoads} } } 
+            steps{ script{
+                    setBuildName("${prodbuildName}","${nonProdBuildName}")
+                    if(intialInput()){ return }
+                    //fmeExecution("Substation_GeoSpatial_Service", "GML_SUB_CONTROLLER_DELTA.fmw", "")
+                    fmeExecution("Substation_GeoSpatial_Service", "GML_SUB_CONTROLLER_INITIAL_LOAD.fmw", "")
+
+        }}}    
+        stage('S_GeosptialGML_Load_Validation') { 
+            // when {not {expression { params.skipSubstationLoads} } } 
+            steps{ script{                        
+                    
+                    jobResult = build propagate: false,job: "/GCM/Test/GCM-DataQualityReports",parameters: [string(name: 'ENVIRONMENT', value: "${ENVIRONMENT}"),string(name: 'DQ_REPORT', value: "GML_GEOJSON_Validation_Script.sql")]
+                    
+        }}}               
+        stage('S_GeosptialGeoJSON_Load') { 
+            // when {not {expression { params.skipSubstationLoads} } } 
+            steps{ script{
+                    setBuildName("${prodbuildName}","${nonProdBuildName}")
+                    if(intialInput()){ return }
+                
+                //fmeExecution("Substation_GeoSpatial_Service", "GeoJson_SUB_CONTROLLER_DELTA.fmw", "")
+                fmeExecution("Substation_GeoSpatial_Service", "GeoJson_SUB_CONTROLLER_INITIAL_LOAD.fmw", "")
+
+    }}}  
+        stage('S_GeosptialGeoJSON_Load_Validation') { 
+            // when {not {expression { params.skipSubstationLoads} } } 
+            steps{ script{                        
+                    
+                    jobResult = build propagate: false,job: "/GCM/Test/GCM-DataQualityReports",parameters: [string(name: 'ENVIRONMENT', value: "${ENVIRONMENT}"),string(name: 'DQ_REPORT', value: "GML_GEOJSON_Validation_Script.sql")]
+                    
+        }}}  
+        stage('S_EMS_Intial_Load') { 
+            // when {not {expression { params.skipSubstationLoads} } } 
+            steps{ script{    
+                if(intialInput()){ return }  
+                def fileContent = readFile "${WORKSPACE}/JenkinsFile/db/gcis-connectivity-oracle/EMS_INITIAL_LOAD.sql"
+                build propagate: false,job: "/GCM/DB/gcis-sql-execution",parameters: [string(name: 'ENVIRONMENT', value: "${ENVIRONMENT}"),base64File(name: 'UserInputSQLfile', base64: Base64.encoder.encodeToString(fileContent.bytes))]                    
+        }}}  
+        stage('S_EMS_Intial_Load_Validation') { 
+            // when {not {expression { params.skipSubstationLoads} } } 
+            steps{ script{
+                     jobResult = build propagate: false,job: "/GCM/Test/GCM-DataQualityReports",parameters: [string(name: 'ENVIRONMENT', value: "${ENVIRONMENT}"),string(name: 'DQ_REPORT', value: "EMS_Initial_Load_Validation.sql")]
+                    
+        }}}
+
+}
+post{ 
+        always { 
+            archiveArtifacts artifacts: '*.txt', followSymlinks: false
+            setBuildName("${prodbuildName}","${nonProdBuildName}")
+            echo "Proceeding with Cleanup Activities"
+           cleanWs()
+        }
+        success {
+            office365ConnectorSend color: '#00FF00', message: "Completed ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Success', webhookUrl: "${getJenkinsWebhookURL()}",factDefinitions: [[name: "Build URL", template: "${env.BUILD_URL}"]]
+        }
+        failure{
+            office365ConnectorSend color: '#FF0000', message: "Completed ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Failure', webhookUrl: "${getJenkinsWebhookURL()}",factDefinitions: [[name: "Build URL", template: "${env.BUILD_URL}"]]
+        }
+    }
+}

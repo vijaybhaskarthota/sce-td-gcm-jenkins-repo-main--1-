@@ -1,0 +1,58 @@
+pipeline {
+    agent any 
+    parameters {  
+        choice (name: 'ENVIRONMENT', choices: ['DEV','ST','PT','REGR','BF','PROD'], description: 'Please choose Environment')   
+        choice (name: 'QUEUE_NAME', choices: ['GCM_Queue','GCM_Test_Queue','GCM_PROD_Queue','LYWCPGCM02'], description: 'Please choose Queue Name')
+        choice (name: 'ACTION', choices: ['HoldQueue','CancelScheduledAllJobsInQueue','ReleaseQueue','ExecuteJob','HoldJob','CancelScheduledParticularJob','ReleaseJob'], description: 'Please choose Action')         
+        choice (name: 'REDWOOD_JOB_NAME', choices: ['J_CHNG_HIER','J_EMS_HIER','J_GCM_M2G_FINAL_LOAD','J_GCM_M2G_STRUCTURE_LOAD','J_INGEST_SCHEDULER',
+'J_CKT_GML','J_CKT_GEOJSON','J_LB_GML','J_LB_GEOJSON','J_GEO_ARCHIVAL','J_GCM_M2G_STRUCTURE_LOAD_NEW','J_GCM_FMW_INGEST_SCHEDULER','J_GCM_FMW_EMS_HIER',
+'J_GCM_FMW_CHNG_HIER','J_CKT_MERGED','J_GCM_SFI_DELTA','J_GCM_HIER_VAL_EXTRACT_DTDWNLD','J_GCM_FMW_THR_PROCESSOR','J_GCM_FMW_VREG_LINE_DATA',
+'J_GCM_GeoJson_SUB_CONTROLLER_DELTA','J_GCM_GML_SUB_CONTROLLER_DELTA','J_GCM_DELETE_Sub_GeoSpatial_ARCHIVED_FILES','J_CKT_TRANS_DELTA',
+'J_CKT_TRANS_DELETE','J_GCM_TEST','J_GCM_FMW_ASPEN_PROCESSOR','J_GCM_DER_LOAD','J_GCM_INVERTER_LOAD','J_GCM_DER_VAL','J_GCM_INVERTER_VAL',
+'J_GCM_PE_SWITCH_LOAD','J_GCM_VREG_LOAD','J_GCM_WB_BUILD_DS_M2G'], description: 'Please choose Job Name.Only Applicable for Action=ExecuteJob,HoldJob,ReleaseJob')
+    }
+    options {
+        office365ConnectorWebhooks([[name: "${env.JOB_NAME}", notifyAborted: true, notifyBackToNormal: true, notifyFailure: true, notifyNotBuilt: true, notifyRepeatedFailure: true, notifySuccess: true, notifyUnstable: true, startNotification: true, url: "${getJenkinsWebhookURL()}"]])
+        buildDiscarder logRotator(artifactDaysToKeepStr: '30', artifactNumToKeepStr: '30', daysToKeepStr: '30', numToKeepStr: '30')
+        disableConcurrentBuilds()
+        timestamps()
+    }
+    stages {
+        stage('Initialize') {
+            steps { 
+                script{
+                        echo "Input parameters: ENVIRONMENT:${ENVIRONMENT}, QUEUE_NAME:${QUEUE_NAME}, ACTION:${ACTION}, JOB_NAME:${REDWOOD_JOB_NAME}"
+                    }}}
+        stage('Execute Redwood') { 
+            environment{
+                REDWOOD_NONPROD_URL= "https://scheduler-t.sce.com/redwood/api-extension/External/GLOBAL/ExecuteRedwood" 
+                REDWOOD_PROD_URL= "https://scheduler.sce.com/redwood/api-extension/External/GLOBAL/ExecuteRedwood"
+                REDWOOD_URL= "${ENVIRONMENT == 'PROD' ? env.REDWOOD_PROD_URL : env.REDWOOD_NONPROD_URL}"
+            }
+            steps {
+                script{
+                    buildName "#${env.BUILD_NUMBER} - ${ENVIRONMENT} - ${ACTION} - ${QUEUE_NAME} - ${REDWOOD_JOB_NAME}"  
+                    echo "Env:${ENVIRONMENT} - Action:${ACTION} - Queue:${QUEUE_NAME} -Job Name:${REDWOOD_JOB_NAME} - Redwood Selected URL:${env.REDWOOD_URL} - Redwood Non Prod URL:${env.REDWOOD_NONPROD_URL} - Redwood Prod URL:${env.REDWOOD_PROD_URL}"
+                try{
+                    writeFile file: "${ENVIRONMENT}_${ACTION}_${QUEUE_NAME}_${REDWOOD_JOB_NAME}_Logs.txt", text: httpRequest(acceptType: 'APPLICATION_JSON', consoleLogResponseBody: false, contentType: 'APPLICATION_JSON', customHeaders: [[maskValue: true, name: 'security-token', value: 'gcm_security-token'], [maskValue: true, name: 'queue-name', value: "${QUEUE_NAME}"], [maskValue: true, name: 'api-name', value: "${ACTION}"],[maskValue: true, name: 'job-name', value: "${REDWOOD_JOB_NAME}"]], responseHandle: 'NONE', url: "${env.REDWOOD_URL}", wrapAsMultipart: false).content
+                    }
+                catch (Exception excep){
+                    echo "redwood-Exception"
+                    throw (excep)
+                }
+                }
+            }
+        }
+    }
+    post { 
+        always {
+            archiveArtifacts artifacts: '*.txt', followSymlinks: false
+            echo "Proceeding with Cleanup Activities"
+            cleanWs()
+        }
+        success {
+            office365ConnectorSend color: '#00FF00', message: "Completed ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Success', webhookUrl: "${getJenkinsWebhookURL()}"
+        }
+        failure{
+            office365ConnectorSend color: '#FF0000', message: "Completed ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Failure', webhookUrl: "${getJenkinsWebhookURL()}"
+}}}

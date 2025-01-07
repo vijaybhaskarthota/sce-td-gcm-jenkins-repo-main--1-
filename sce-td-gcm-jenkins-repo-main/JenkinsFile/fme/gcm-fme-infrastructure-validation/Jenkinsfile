@@ -1,0 +1,124 @@
+#!groovy
+import java.net.URI
+def fme_props
+pipeline {
+    agent any 
+    parameters {  
+        choice (name: 'ENVIRONMENT', choices: ['DEV','ST','PT','REGR','BF','PROD','ALL'], description: 'Please choose Environment') 
+        booleanParam(name: 'CheckFMEServerConnectivity', defaultValue: true, description: 'Check the connectivity between FME Server and other remote servers')
+        booleanParam(name: 'CheckFMEServerStatus', defaultValue: true, description: 'Check the status of FME Server')
+        booleanParam(name: 'FMEServerReStart', defaultValue: false, description: 'Restart FME Servers')
+    }
+    options {
+        office365ConnectorWebhooks([[name: "${env.JOB_NAME}", notifyAborted: true, notifyBackToNormal: true, notifyFailure: true, notifyNotBuilt: true, notifyRepeatedFailure: true, notifySuccess: true, notifyUnstable: true, startNotification: true, url: "${getJenkinsWebhookURL()}"]])
+        buildDiscarder logRotator(artifactDaysToKeepStr: '30', artifactNumToKeepStr: '30', daysToKeepStr: '30', numToKeepStr: '30')
+        disableConcurrentBuilds()
+        skipDefaultCheckout(true)
+    }
+    stages {
+        stage('Initialize') { 
+            steps {  
+                script {  
+                    fme_props = loadProperties("FME") 
+                    cleanWs()
+                    checkout scm
+                    currentBuild.displayName = "#${env.BUILD_NUMBER} - ${env.ENVIRONMENT}"
+                }
+            }
+        }
+        stage('FME Infrastructure Validation') {
+            parallel {
+                stage("0. DEV") {
+                    when {  
+                        anyOf{
+                            environment name: 'ENVIRONMENT', value: 'ALL' 
+                            environment name: 'ENVIRONMENT', value: 'DEV'              
+                        }
+                    }      
+                    steps {
+                        script{
+                            // powershell label: 'Validating FME Infrastructure', script: "JenkinsFile/fme/gcm-fme-infrastructure-validation/gcmservervalidation.ps1 ${fme_props['fme.server.host.dev.1']},${fme_props['fme.server.host.dev.2']},${fme_props['fme.server.host.dev.3']}"
+                            powershell label: 'Validating FME Infrastructure', script: "JenkinsFile/fme/gcm-fme-infrastructure-validation/gcmservervalidation.ps1 ${fme_props['fme.server.host.dev.1']}"
+                        }
+                    }
+                }    
+                stage("1. ST") {
+                    when {  
+                        anyOf{
+                            environment name: 'ENVIRONMENT', value: 'ALL' 
+                            environment name: 'ENVIRONMENT', value: 'ST'              
+                        }
+                    }      
+                    steps {
+                        script{
+                            powershell label: 'Validating FME Infrastructure', script: "JenkinsFile/fme/gcm-fme-infrastructure-validation/gcmservervalidation.ps1 ${fme_props['fme.server.host.st.1']}"
+                        }
+                    }                    
+                }   
+                stage("2. PT") {
+                    when {  
+                        anyOf{
+                            environment name: 'ENVIRONMENT', value: 'ALL' 
+                            environment name: 'ENVIRONMENT', value: 'PT'              
+                        }
+                    }      
+                    steps {
+                        script{
+                            powershell label: 'Validating FME Infrastructure', script: "JenkinsFile/fme/gcm-fme-infrastructure-validation/gcmservervalidation.ps1 ${fme_props['fme.server.host.pt.1']},${fme_props['fme.server.host.pt.2']},${fme_props['fme.server.host.pt.3']},${fme_props['fme.server.host.pt.4']}"
+                        }
+                    }                    
+                }
+                stage("3. Regression") {
+                    when {  
+                        anyOf{
+                            environment name: 'ENVIRONMENT', value: 'ALL' 
+                            environment name: 'ENVIRONMENT', value: 'REGR'              
+                        }
+                    }      
+                    steps {
+                            powershell label: 'Validating FME Infrastructure', script: "JenkinsFile/fme/gcm-fme-infrastructure-validation/gcmservervalidation.ps1 ${fme_props['fme.server.host.reg.1']},${fme_props['fme.server.host.reg.2']}"
+                    }                   
+                } 
+                stage("4. Production") {
+                    when {  
+                        anyOf{
+                            environment name: 'ENVIRONMENT', value: 'ALL' 
+                            environment name: 'ENVIRONMENT', value: 'PROD'              
+                        }
+                    }     
+                    steps {
+                        script{
+                            powershell label: 'Validating FME Infrastructure', script: "JenkinsFile/fme/gcm-fme-infrastructure-validation/gcmservervalidation.ps1 ${fme_props['fme.server.host.prod.1']},${fme_props['fme.server.host.prod.2']},${fme_props['fme.server.host.prod.3']},${fme_props['fme.server.host.prod.4']}"
+                        }
+                    }                   
+                } 
+                stage("5. Break Fix") {
+                when {  
+                    anyOf{
+                        environment name: 'ENVIRONMENT', value: 'ALL' 
+                        environment name: 'ENVIRONMENT', value: 'BF'              
+                    }
+                }     
+                    steps {
+                        script{
+                            powershell label: 'Validating FME Infrastructure', script: "JenkinsFile/fme/gcm-fme-infrastructure-validation/gcmservervalidation.ps1 ${fme_props['fme.server.host.bf.1']},${fme_props['fme.server.host.bf.2']}"
+                        }
+                    }                   
+                } 
+            }
+        }
+    }
+    post { 
+        // always { 
+        //     //archiveArtifacts artifacts: 'JenkinsFile/gcis-data-quality-reports/sql/*.sql,JenkinsFile/gcis-data-quality-reports/sql-output/*.log,JenkinsFile/gcis-data-quality-reports/sql-trace/*.txt', followSymlinks: false
+        //     //archiveArtifacts artifacts: 'JenkinsFile/db/gcis-data-quality-reports/sql-output/*.log,JenkinsFile/db/gcis-data-quality-reports/sql-output/*.xls,JenkinsFile/db/gcis-data-quality-reports/sql-output/*.html', followSymlinks: false
+        //     //publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'JenkinsFile/db/gcis-data-quality-reports/sql-output', reportFiles: '*.html', reportName: "DQ-Report", reportTitles: "DQ Report - ${env.DQ_REPORT}"])
+        // }
+        success {
+            office365ConnectorSend color: '#00FF00', message: "Completed ${env.JOB_NAME} [${env.BUILD_NUMBER}](${env.BUILD_URL})", status: 'Success', webhookUrl: "${getJenkinsWebhookURL()}"            
+            }
+        failure{
+            office365ConnectorSend color: '#FF0000', message: "Completed ${env.BRANCH_NAME} ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Failure', webhookUrl: "${getJenkinsWebhookURL()}"
+        }
+    }
+}

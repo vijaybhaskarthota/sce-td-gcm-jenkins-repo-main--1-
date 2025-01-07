@@ -1,0 +1,159 @@
+#!groovy
+pipeline {
+    agent any 
+    parameters {
+        booleanParam(name: 'NexusReleasePackage', defaultValue: false, description: 'Do you want to create Nexus Release Package? Only Applicable for Release & Breakfix Branch.Please ensure developerVersion and releaseVersion are correctly set in Java Config file in Jenkins')
+        booleanParam(name: 'DeployFromNexus', defaultValue: false, description: 'Do you want to create Deployment from Nexus?')
+    }
+    options {
+    office365ConnectorWebhooks([[name: "${env.JOB_NAME}", notifyAborted: true, notifyBackToNormal: true, notifyFailure: true, notifyNotBuilt: true, notifyRepeatedFailure: true, notifySuccess: true, notifyUnstable: true, startNotification: true, url: "${getJenkinsWebhookURL()}"]])
+    buildDiscarder logRotator(artifactDaysToKeepStr: '30', artifactNumToKeepStr: '30', daysToKeepStr: '30', numToKeepStr: '30')
+    disableConcurrentBuilds()
+    timestamps()
+    }
+    stages {
+        stage('Initialize') { 
+            steps {
+                script{
+                    java_props = loadProperties("JAVA")
+                    javaUtils = new JavaUtils()
+                    nexusUtils = new NexusUtils()
+                }
+            }
+        }    
+        stage('Code Analysis, Deploy and Test in different Environments') {
+            when {
+                not {
+                    allOf {
+                        branch "main";
+                        expression {
+                            return currentBuild.getBuildCauses().any{cause -> cause.toString().contains('BranchIndexingCause')}
+                        }
+                    }
+                }  
+            }
+             environment {
+                developerVersion="${java_props['java.config.developer_version']}"
+                releaseVersion="${java_props['java.config.release_version']}"
+                vault_url="${java_props['java.passwordvault.client_url']}"
+                vault_id="${java_props['java.passwordvault.client_id']}"
+                config_user="${java_props['java.springcloudconfig.username']}"
+            }      
+            parallel {
+                stage("ENV N/A") {
+                    when {  not { anyOf {
+                    branch 'R6.1-DEV';
+                    branch 'R6.1-REG';
+                        } } }
+                    stages{
+                        stage('Build, Code Analysis, Code Coverage') { 
+                            steps {
+                                script {
+                                    javaUtils.executeJavaBuildForConfigServer() 
+                                }                               
+                            }
+                        }
+                    }
+                }                                
+            stage("1. DEV"){
+                when {  branch "R6.1-DEV" }
+                    stages{
+                        stage('Build, Code Analysis, Code Coverage') {
+                             when {not {expression { params.DeployFromNexus} } }    
+                            steps {
+                                script {
+                                    javaUtils.executeJavaBuildForConfigServer()
+                                }
+                            }
+                        }        
+                        stage('Deploy') {
+                            environment {
+                                //nexus_tomcat = "${java_props['java.server.url.nexus.1']}"
+                                //jenkins_tomcat = "${java_props['java.server.url.jenkins.1']}"
+                                devwindows_tomcat = "${java_props['java.devwindows.server.url']}"
+                            }  
+                            steps{   
+                                echo "Executing deployment steps"     
+                                script{
+                                    if (params.DeployFromNexus) { 
+                                        def ArtifactVersion = input message: "Proceed with Deployment? Please Select Deployment Artifact",id:'DeployArtifactVersionID',ok: 'Deploy',parameters: [choice(name: 'ArtifactVersion',   choices: script{nexusUtils.retriveNexusArtifactVersions("sce-snapshot")}, description: 'Choose Artifact Version')]       
+                                        echo "Selected Version for Deployment is:${ArtifactVersion}"
+                                        nexusUtils.retriveNexusArtifact("sce-snapshot",ArtifactVersion)
+                                    }                                                                               
+                                }                             
+                               echo "Deployment Started in Dev"
+                                deploy adapters: [tomcat9(credentialsId: 'Dev-tomcat', path: '', url: "${devwindows_tomcat}")], 
+                                //tomcat9(credentialsId: 'Dev-tomcat', path: '', url: "${jenkins_tomcat}")], 
+                                contextPath: 'GcmConfigServer', onFailure: false, war: 'target/GcmConfigServer*.war'
+                                echo "Deployment Completed in Dev"
+                            }
+                            post {
+                                aborted{ echo "Deploy stage has been aborted" }
+                            }   
+                        }   
+                    }   
+                }
+                stage("1. REG" ) {
+                    when {  branch "R6.1-REG" } 
+                        stages{
+                            stage('Build, Code Analysis, Code Coverage') { 
+                                when {not {expression { params.DeployFromNexus} } }            
+                                steps{
+                                    script{
+                                        if (params.NexusReleasePackage) {
+                                            echo "Nexus Release Package is true.Executing Java Release Build:releaseVersion:${releaseVersion},developerVersion:${developerVersion}"
+                                            javaUtils.executeJavaReleaseBuildForConfigServer()
+                                        }
+                                    else{
+                                            echo "Nexus Release Package is false.Executing Java Snapshot Build"
+                                            javaUtils.executeJavaBuildForConfigServer()
+                                        }   
+                                    }
+                                }
+                            }                                  
+                            stage('Deploy'){
+                                environment{
+                                    //nexus_tomcat = "${java_props['java.server.url.nexus.1']}"
+                                    //jenkins_tomcat = "${java_props['java.server.url.jenkins.1']}"
+                                    devwindows_tomcat = "${java_props['java.devwindows.server.url']}"
+                                }
+                                steps{
+                                    echo "Executing deployment steps"  
+                                    script{
+                                        if (params.DeployFromNexus) { 
+                                            def ArtifactVersion = input message: "Proceed with Deployment? Please Select Deployment Artifact",id:'DeployArtifactVersionID',ok: 'Deploy',parameters: [choice(name: 'ArtifactVersion',   choices: script{nexusUtils.retriveNexusArtifactVersions("sce-releases")}, description: 'Choose Artifact Version')]  
+                                            echo "Selected Version for Deployment is:${ArtifactVersion}"
+                                            nexusUtils.retriveNexusArtifact("sce-releases",ArtifactVersion)
+                                        }
+                                        else{
+                                            input message: "Proceed with Deployment?",ok: 'Deploy' 
+                                        }                                         
+                                    }    
+                                    echo "Deployment Started in REG" 
+                                    deploy adapters: [tomcat9(credentialsId: 'Dev-tomcat', path: '', url: "${devwindows_tomcat}")],
+                                    contextPath: 'GcmConfigServer', onFailure: false, war: 'target/GcmConfigServer*.war'
+                                    echo "Deployment Completed in REG"
+                                }
+                                post{
+                                    aborted{
+                                    echo "Deploy stage has been aborted"
+                                    }   
+                                }  
+                            } 
+                        }     
+                    } 
+            }
+        }
+    }
+    post{ 
+        always { 
+           cleanWs()
+        }
+        success {
+            office365ConnectorSend color: '#00FF00', message: "Completed ${env.BRANCH_NAME} ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Success', webhookUrl: "${getJenkinsWebhookURL()}"
+        }
+        failure{
+            office365ConnectorSend color: '#FF0000', message: "Completed ${env.BRANCH_NAME} ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Failure', webhookUrl: "${getJenkinsWebhookURL()}"
+        }
+    }
+}

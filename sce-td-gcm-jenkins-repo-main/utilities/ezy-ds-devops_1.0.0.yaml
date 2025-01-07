@@ -1,0 +1,30 @@
+info:
+  version: 1.0.0
+  title: EzyDataServiceDevops
+  name: ezydataservicedevops
+gateways:
+  - datapower-gateway
+plans:
+  default-plan:
+    title: Default Plan
+    description: Default Plan
+    rate-limits:
+      default:
+        value: 100/1hour
+visibility:
+  view:
+    type: public
+    orgs: []
+    tags: []
+    enabled: true
+  subscribe:
+    type: authenticated
+    orgs: []
+    tags: []
+    enabled: true
+product: 1.0.0
+apis:
+  grviewerusermanagementdevops1.0.0:
+    $ref: .\grviewerusermanagementdevops_1.0.0.yaml
+  uddrphotoservicedevops1.0.0:
+    $ref: .\uddrphotoservicedevops_1.0.0.yaml

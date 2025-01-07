@@ -1,0 +1,709 @@
+#!groovy
+def db_props
+def release_props
+def db_util
+pipeline {
+    agent any  
+    parameters {
+        choice(name: 'NUM_OF_COMMIT', choices: ['1', '2', '3', '4','5','6','7', '8', '9', '10','20'], description: 'Select Num of commits')
+        choice(name: 'ACTION', choices: ['INSTALL', 'ROLLBACK'], description: 'Select Action')
+        booleanParam(name: 'SkipTests', defaultValue: false, description: 'Do you want to skip Ready API Testing?')
+        booleanParam(name: 'SkipCompare', defaultValue: false, description: 'Do you want to skip Git vs DB comparison?')
+    }
+    options {
+        office365ConnectorWebhooks([[name: "${env.JOB_NAME}", notifyAborted: true, notifyBackToNormal: true, notifyFailure: true, notifyNotBuilt: true, notifyRepeatedFailure: true, notifySuccess: true, notifyUnstable: true, startNotification: true, url: "${getJenkinsWebhookURL()}"]])
+        buildDiscarder logRotator(artifactDaysToKeepStr: '30', artifactNumToKeepStr: '30', daysToKeepStr: '30', numToKeepStr: '30')
+        disableConcurrentBuilds()
+        timestamps()
+    }
+    stages {
+        stage('Build & Octane Integration') { 
+            when {
+                not {
+                    allOf {
+                        branch "master";
+                        expression {
+                            return currentBuild.getBuildCauses().any{cause -> cause.toString().contains('BranchIndexingCause')}
+                        }
+                    }
+                }  
+            }
+            steps {
+                script {
+                    db_props = loadProperties("DB")
+                    release_props = loadProperties("RELEASE")
+                    db_util = new DBUtils()
+                    readyAPIUtils = new ReadyAPIUtils()
+                    //buildName "#${env.BUILD_NUMBER} - ${ENVIRONMENT} - ${release_props['gcm.release.prod.crq']}"  
+                    if("master" == "${env.BRANCH_NAME}") {
+                        currentBuild.displayName = "#${env.BUILD_NUMBER} - ${env.BRANCH_NAME} - ${release_props['gcm.release.prod.crq']}"
+                    }else{                        
+                        currentBuild.displayName = "#${env.BUILD_NUMBER} - ${env.BRANCH_NAME} - ${release_props['gcm.release.non_prod.crq']}"
+                    }
+                    env.SQL_COMPILE_FILE = "${db_util.getFilePath("Compile.sql")}"
+                    powershell label: 'Generating install sql', script: "${db_util.getFilePath("installscriptcreator.ps1")}"
+                    powershell label: 'Generating the rollback sql', script: "${db_util.getFilePath("rollbackscriptcreator.ps1")}"
+                    try{
+                        collectBranchesToAlmOctane configurationId: 'cb826be3-f417-4ac7-81e5-eb62239438f0', credentialsId: 'git-svc-acct', filter: '', repositoryUrl: "${env.GIT_URL}", scmTool: 'github_cloud', workspaceId: '2001'
+                        collectPullRequestsToAlmOctane configurationId: 'cb826be3-f417-4ac7-81e5-eb62239438f0', credentialsId: 'git-svc-acct', repositoryUrl: "${env.GIT_URL}", scmTool: 'github_cloud', sourceBranchFilter: '', targetBranchFilter: '', workspaceId: '2001'
+                    }
+                    catch(Exception e){
+                        echo 'Exception occurred during Octane Integration: ' + e.toString()    
+                    }
+                }
+                archiveArtifacts artifacts: 'CICD/*.sql,CICD/*.log,*.log,output/*', followSymlinks: false
+            }
+        }
+        stage('Code Analysis, Deploy and Test in different Environments') {
+            when {
+                not {
+                    allOf {
+                        branch "master";
+                        expression {
+                            return currentBuild.getBuildCauses().any{cause -> cause.toString().contains('BranchIndexingCause')}
+                        }
+                    }
+                }  
+            }
+            parallel {
+                stage("0. ENV N/A") {
+                when {  not { anyOf {
+                    branch 'master';
+                    branch 'devops';
+                    branch 'breakfix';
+                    branch 'DEV';
+                    branch 'ST';
+                    branch 'PT';
+                    branch 'REG';
+                    branch 'disabled';
+                    } } }
+                environment {
+                        DB_CRED = credentials('GCM-Non-ADMS-Dev-DB-TCGACDS-RW')
+                        DB_CONN_STR = "${db_props['db.oracle.url.dev']}"
+                        //SQL_COMPILE_FILE = "${db_util.getFilePath("Compile.sql")}"
+                        //SQL_COMPILE_OUTPUT_FILE = "${sql_compile_output_file}"
+                }  
+                    stages{
+                        stage('Toad Code Analysis'){
+                            steps {
+                                script{
+                                    echo 'Toad Code Analysis'
+                                    powershell label: 'Running Code Analysis', script: "${db_util.getFilePath("codeanalysis.ps1")}"           
+                                }
+                            }
+                        }    
+                        stage('SonarQube Code Analysis'){
+                            tools {  jdk 'jdk17' }  
+                            environment { scannerHome = tool 'SonarQubeScanner' }              
+                            steps{
+                                withSonarQubeEnv(installationName: 'EnterpriseDevops-SonarQubeServer', credentialsId: 'EnterpriseDevops-SonarToken') {
+                                //bat '%scannerHome%/bin/sonar-scanner -Dsonar.projectKey=com.sce.db.oracle:gcis-connectivity-oracle -Dsonar.projectName=gcis-connectivity-oracle -Dsonar.projectVersion=1.0.0 -Dsonar.sourceEncoding=UTF-8 -Dsonar.sources=. -Dsonar.exclusions=**/output/**,**/Tables/**,**/MetaData/**,**/Index/**,**/Grants/**,**/PBIQueries/**,**/Sequences/**,**/CICD/** -Dsonar.plsql.defaultSchema=TCGACDS -Dsonar.plsql.jdbc.url=jdbc:oracle:thin:%DB_CONN_STR% -Dsonar.plsql.jdbc.user=%DB_CRED_USR% -Dsonar.plsql.jdbc.password=%DB_CRED_PSW% -Dsonar.plsql.jdbc.driver.class=oracle.jdbc.OracleDriver -Dsonar.plsql.jdbc.driver.path=E:\\BuildServer\\OracleJDBC\\ojdbc8.jar'
+                                bat '%scannerHome%/bin/sonar-scanner -Dsonar.projectKey=com.sce.db.oracle:gcis-connectivity-oracle -Dsonar.projectName=gcis-connectivity-oracle -Dsonar.newCode.referenceBranch=master -Dsonar.sourceEncoding=UTF-8 -Dsonar.sources=. -Dsonar.exclusions=**/output/**,**/Tables/**,**/MetaData/**,**/Index/**,**/Grants/**,**/PBIQueries/**,**/Sequences/**,**/CICD/** -Dsonar.plsql.defaultSchema=TCGACDS -Dsonar.plsql.jdbc.url=jdbc:oracle:thin:%DB_CONN_STR% -Dsonar.plsql.jdbc.user=%DB_CRED_USR% -Dsonar.plsql.jdbc.password=%DB_CRED_PSW% -Dsonar.plsql.jdbc.driver.class=oracle.jdbc.OracleDriver -Dsonar.plsql.jdbc.driver.path=E:\\BuildServer\\OracleJDBC\\ojdbc8.jar'
+                                }
+                            }
+                        }    
+                        stage("Sonar Quality Gate"){
+                            steps{
+                                echo "Skipping Sonar Quality gate - tech issues to be resolved by Ent Devops team"
+                                // timeout(time: 5, unit: 'MINUTES') { // Just in case something goes wrong, pipeline will be killed after a timeout
+                                //     waitForQualityGate abortPipeline: false
+                                // }
+                            }
+                        }
+                    }
+                }    
+                stage("1. DEV") {
+                    when {   branch "DEV"  }
+                    environment {
+                            DB_CRED = credentials('GCM-Non-ADMS-Dev-DB-TCGACDS-RW')
+                            DB_CONN_STR = "${db_props['db.oracle.url.dev']}"
+            
+                    }  
+                    stages{
+                        stage('Toad Code Analysis') {
+                            steps {
+                                script{
+                                    echo 'Toad Code Analysis'
+                                    powershell label: 'Running Code Analysis', script: "${db_util.getFilePath("codeanalysis.ps1")}"           
+                                }    
+                            }
+                        }   
+                        stage('Deploy') {       
+                            steps {
+                                script{
+                                    powershell label: 'Executing install/Rollback sql', script: "${db_util.getFilePath("executescript.ps1")}"
+                                    powershell label: 'trigger insert sql, ignore when not main branch', script: "${db_util.getFilePath("insertdbscript.ps1")}"
+                                    //powershell label: 'Running compile script', script: '.\\CICD\\Compile.sql' 
+                                    
+                                                                        
+                                    /*          
+                                    echo "Executing SQL Input File ${sql_compile_file}"
+                                    powershell label: 'SQL Execution', script: 'sqlplus "$env:DB_CRED_USR/$env:DB_CRED_PSW$env:DB_CONN_STR" `@"$env:SQL_COMPILE_FILE" | out-file "$env:SQL_COMPILE_OUTPUT_FILE"'
+                                    echo "SQL Execution Complete. SQL Input File:${SQL_COMPILE_FILE}     SQL Output File:${SQL_COMPILE_OUTPUT_FILE}"
+                */
+                                    
+                                    //powershell label: 'Running compile script', script: "${db_util.getFilePath("Compile.sql")}" 
+                                    archiveArtifacts artifacts: 'CICD/*.sql,CICD/*.log,CICD/*.html,CICD/*.csv,CICD/*.txt,*.log,output/*', followSymlinks: false
+                                    build wait: false,job: '/GCM/DB/gcis-data-schema-compare', parameters: [string(name: 'Source_DB_Environment', value: 'DEV'), string(name: 'Target_DB_Environment', value: 'ST')]
+                                }
+                            } 
+                            post {
+                                aborted{
+                                echo "Deploy stage has been aborted"
+                            }
+                            }    
+                        }      
+                        stage('utPLSQL Unit Test') {   
+                            steps {
+                                script{   
+                                    bat 'E:/BuildServer/installables/utPLSQL-cli/utPLSQL-cli/bin/utplsql run %DB_CRED_USR%/%DB_CRED_PSW%%DB_CONN_STR% -f=UT_JUNIT_REPORTER -o=utplsql_junit.xml -f=UT_COVERAGE_SONAR_REPORTER -o=utplsql_sonar_coverage.xml -s -f=UT_SONAR_TEST_REPORTER -o=utplsql_sonar_test.xml --failure-exit-code=0 -source_path=./Resources'
+                                    archiveArtifacts artifacts: 'utplsql*.xml', followSymlinks: false
+                                    junit 'utplsql_junit.xml'
+                                }                        
+                            }
+                        }                          
+                        stage('SonarQube Code Analysis'){
+                            tools {  jdk 'jdk17' }  
+                            environment { scannerHome = tool 'SonarQubeScanner' }              
+                            steps{
+                                withSonarQubeEnv(installationName: 'EnterpriseDevops-SonarQubeServer', credentialsId: 'EnterpriseDevops-SonarToken') {
+                                bat '%scannerHome%/bin/sonar-scanner -Dsonar.projectKey=com.sce.db.oracle:gcis-connectivity-oracle -Dsonar.projectName=gcis-connectivity-oracle -Dsonar.projectVersion=2.0.0 -Dsonar.newCode.referenceBranch=master -Dsonar.sourceEncoding=UTF-8 -Dsonar.sources=. -Dsonar.exclusions=**/output/**,**/Tables/**,**/MetaData/**,**/Index/**,**/Grants/**,**/PBIQueries/**,**/Sequences/**,**/CICD/** -Dsonar.plsql.defaultSchema=TCGACDS -Dsonar.plsql.jdbc.url=jdbc:oracle:thin:%DB_CONN_STR% -Dsonar.plsql.jdbc.user=%DB_CRED_USR% -Dsonar.plsql.jdbc.password=%DB_CRED_PSW% -Dsonar.plsql.jdbc.driver.class=oracle.jdbc.OracleDriver -Dsonar.plsql.jdbc.driver.path=E:\\BuildServer\\OracleJDBC\\ojdbc8.jar -Dsonar.testExecutionReportPaths=utplsql_sonar_test.xml -Dsonar.coverageReportPaths=utplsql_sonar_coverage.xml'
+                                }
+                            }
+                        }    
+                        stage("Sonar Quality Gate"){
+                            steps{
+                                echo "Skipping Sonar Quality gate - tech issues to be resolved by Ent Devops team"
+                                // timeout(time: 5, unit: 'MINUTES') { // Just in case something goes wrong, pipeline will be killed after a timeout
+                                //     waitForQualityGate abortPipeline: false
+                                // }
+                            }
+                        }
+                        stage("Git_vs_DB") {
+                            environment {
+                                DEVOPS_DB_CRED = credentials('GCM-DEVOPS-DB-TCGACDS-RW')
+                                DEVOPS_DB_CONN_STR = "${db_props['db.oracle.url.devops']}"  
+                                //SQL_COMPILE_FILE = "${db_util.getFilePath("Compile.sql")}"
+                            }     
+                            when {not {expression { params.SkipCompare} } }
+                            steps{
+                                powershell label: 'Executing install/Rollback sql', script: "${db_util.getFilePath("compareDBvsGit.ps1")}"
+                            }
+                        }
+                        stage('ReadyAPI Int. Test') {   
+                        when {not {expression { params.SkipTests} } }
+                            steps {
+                                script{
+                                    readyAPIUtils.executeReadyAPITest('ALL','DEV_v3',false)
+                                    readyAPIUtils.executeReadyAPITest('DC','DEV_v4',false)
+                                    readyAPIUtils.executeReadyAPITest('DC','DEV_v5',false)
+                                    readyAPIUtils.executeReadyAPITest('M2G','DEV_v4',false)
+                                }                        
+                            }
+                        }           
+                    }
+                }             
+
+
+                stage("2. ST") {
+                    when {   branch "ST"  }
+                    environment {
+                            DB_CRED = credentials('GCM-Non-ADMS-ST-DB-TCGACDS-RW')
+                            DB_CONN_STR = "${db_props['db.oracle.url.st']}"
+                
+                    }  
+                    stages{
+                        stage('Toad Code Analysis'){
+                            steps {
+                                echo 'Toad Code Analysis'
+                                powershell label: 'Running Code Analysis', script: "${db_util.getFilePath("codeanalysis.ps1")}"           
+                            }
+                        }   
+                        stage('Deploy') {       
+                            steps {
+                                powershell label: 'Executing install/Rollback sql', script: "${db_util.getFilePath("executescript.ps1")}"
+                                powershell label: 'trigger insert sql, ignore when not main branch', script: "${db_util.getFilePath("insertdbscript.ps1")}"
+                                
+                                //powershell label: 'Running compile script', script: '.\\CICD\\Compile.sql' 
+                                archiveArtifacts artifacts: 'CICD/*.sql,CICD/*.log,CICD/*.html,CICD/*.csv,CICD/*.txt,*.log,output/*', followSymlinks: false
+                                build wait: false,job: '/GCM/DB/gcis-data-schema-compare', parameters: [string(name: 'Source_DB_Environment', value: 'DEV'), string(name: 'Target_DB_Environment', value: 'ST')]
+                                         
+                            } 
+                            post {
+                                aborted{
+                                echo "Deploy stage has been aborted"
+                            }
+                            }    
+                        } 
+                        stage('utPLSQL Unit Test') {   
+                            steps {
+                                script{   
+                                    bat 'E:/BuildServer/installables/utPLSQL-cli/utPLSQL-cli/bin/utplsql run %DB_CRED_USR%/%DB_CRED_PSW%%DB_CONN_STR% -f=UT_JUNIT_REPORTER -o=utplsql_junit.xml -f=UT_COVERAGE_SONAR_REPORTER -o=utplsql_sonar_coverage.xml -s -f=UT_SONAR_TEST_REPORTER -o=utplsql_sonar_test.xml --failure-exit-code=0 -source_path=./Resources'
+                                    archiveArtifacts artifacts: 'utplsql*.xml', followSymlinks: false
+                                    junit 'utplsql_junit.xml'
+                                }                        
+                            }
+                        } 
+                        stage('SonarQube Code Analysis'){
+                            tools {  jdk 'jdk17' }  
+                            environment { scannerHome = tool 'SonarQubeScanner' }              
+                            steps{
+                                withSonarQubeEnv(installationName: 'EnterpriseDevops-SonarQubeServer', credentialsId: 'EnterpriseDevops-SonarToken') {
+                                bat '%scannerHome%/bin/sonar-scanner -Dsonar.projectKey=com.sce.db.oracle:gcis-connectivity-oracle -Dsonar.projectName=gcis-connectivity-oracle -Dsonar.newCode.referenceBranch=master -Dsonar.sourceEncoding=UTF-8 -Dsonar.sources=. -Dsonar.exclusions=**/output/**,**/Tables/**,**/MetaData/**,**/Index/**,**/Grants/**,**/PBIQueries/**,**/Sequences/**,**/CICD/** -Dsonar.plsql.defaultSchema=TCGACDS -Dsonar.plsql.jdbc.url=jdbc:oracle:thin:%DB_CONN_STR% -Dsonar.plsql.jdbc.user=%DB_CRED_USR% -Dsonar.plsql.jdbc.password=%DB_CRED_PSW% -Dsonar.plsql.jdbc.driver.class=oracle.jdbc.OracleDriver -Dsonar.plsql.jdbc.driver.path=E:\\BuildServer\\OracleJDBC\\ojdbc8.jar -Dsonar.testExecutionReportPaths=utplsql_sonar_test.xml -Dsonar.coverageReportPaths=utplsql_sonar_coverage.xml'
+                                }
+                            }
+                        }    
+                        stage("Sonar Quality Gate"){
+                            steps{
+                                echo "Skipping Sonar Quality gate - tech issues to be resolved by Ent Devops team"
+                                // timeout(time: 5, unit: 'MINUTES') { // Just in case something goes wrong, pipeline will be killed after a timeout
+                                //     waitForQualityGate abortPipeline: false
+                                // }
+                            }
+                        } 
+                        stage("Git_vs_DB") {
+                            environment {
+                                DEVOPS_DB_CRED = credentials('GCM-DEVOPS-DB-TCGACDS-RW')
+                                DEVOPS_DB_CONN_STR = "${db_props['db.oracle.url.devops']}"  
+                                //SQL_COMPILE_FILE = "${db_util.getFilePath("Compile.sql")}"
+                            }     
+                            when {not {expression { params.SkipCompare} } }
+                            steps{
+                                powershell label: 'Executing install/Rollback sql', script: "${db_util.getFilePath("compareDBvsGit.ps1")}"
+                            }
+                        }   
+                        stage('Test') {   
+                        when {not {expression { params.SkipTests} } }
+                            steps {
+                                script{
+                                    readyAPIUtils.executeReadyAPITest('ALL','ST_v3',false)
+                                    readyAPIUtils.executeReadyAPITest('DC','ST_v4',false)
+                                    readyAPIUtils.executeReadyAPITest('DC','ST_v5',false)
+                                    readyAPIUtils.executeReadyAPITest('M2G','ST_v4',false)
+                                }  
+                            }
+                        }                        
+                    }
+                }   
+
+                
+                stage("3. PT") {
+                    when {  branch "PT" }
+                    environment {
+                            DB_CRED = credentials('GCM-PT-DB-TCGACDS-RW')
+                            DB_CONN_STR = "${db_props['db.oracle.url.pt']}"
+                    
+                    }  
+                    stages{
+                        stage('Toad Code Analysis'){
+                            steps {
+                                echo 'Toad Code Analysis'
+                                powershell label: 'Running Code Analysis', script: "${db_util.getFilePath("codeanalysis.ps1")}"           
+                            }
+                        }    
+                        stage('Deploy') {       
+                            steps {
+                                //echo "deployment not enabled"
+                                powershell label: 'Executing install/Rollback sql', script: "${db_util.getFilePath("executescript.ps1")}"
+                                powershell label: 'trigger insert sql, ignore when not main branch', script: "${db_util.getFilePath("insertdbscript.ps1")}"
+                                //powershell label: 'Running compile script', script: '.\\CICD\\Compile.sql' 
+                                //call the schema comparte job with ST as source and PT as target
+                                //def jobResult=build wait: false,job: "${jobName}", parameters: [string(name: 'GCM_ENV', value: "${env}")]
+                                archiveArtifacts artifacts: 'CICD/*.sql,CICD/*.log,CICD/*.html,CICD/*.csv,CICD/*.txt,*.log,output/*', followSymlinks: false
+                                build wait: false,job: '/GCM/DB/gcis-data-schema-compare', parameters: [string(name: 'Source_DB_Environment', value: 'ST'), string(name: 'Target_DB_Environment', value: 'PT')]
+
+                            } 
+                            post {
+                                aborted{
+                                echo "Deploy stage has been aborted"
+                            }
+
+                            }
+
+                        }  
+                        stage('utPLSQL Unit Test') {   
+                            steps {
+                                script{   
+                                    bat 'E:/BuildServer/installables/utPLSQL-cli/utPLSQL-cli/bin/utplsql run %DB_CRED_USR%/%DB_CRED_PSW%%DB_CONN_STR% -f=UT_JUNIT_REPORTER -o=utplsql_junit.xml -f=UT_COVERAGE_SONAR_REPORTER -o=utplsql_sonar_coverage.xml -s -f=UT_SONAR_TEST_REPORTER -o=utplsql_sonar_test.xml --failure-exit-code=0 -source_path=./Resources'
+                                    archiveArtifacts artifacts: 'utplsql*.xml', followSymlinks: false
+                                    junit 'utplsql_junit.xml'
+                                }                        
+                            }
+                        }
+                        stage('SonarQube Code Analysis'){
+                            tools {  jdk 'jdk17' }  
+                            environment { scannerHome = tool 'SonarQubeScanner' }              
+                            steps{
+                                withSonarQubeEnv(installationName: 'EnterpriseDevops-SonarQubeServer', credentialsId: 'EnterpriseDevops-SonarToken') {
+                                bat '%scannerHome%/bin/sonar-scanner -Dsonar.projectKey=com.sce.db.oracle:gcis-connectivity-oracle -Dsonar.projectName=gcis-connectivity-oracle -Dsonar.newCode.referenceBranch=master -Dsonar.sourceEncoding=UTF-8 -Dsonar.sources=. -Dsonar.exclusions=**/output/**,**/Tables/**,**/MetaData/**,**/Index/**,**/Grants/**,**/PBIQueries/**,**/Sequences/**,**/CICD/** -Dsonar.plsql.defaultSchema=TCGACDS -Dsonar.plsql.jdbc.url=jdbc:oracle:thin:%DB_CONN_STR% -Dsonar.plsql.jdbc.user=%DB_CRED_USR% -Dsonar.plsql.jdbc.password=%DB_CRED_PSW% -Dsonar.plsql.jdbc.driver.class=oracle.jdbc.OracleDriver -Dsonar.plsql.jdbc.driver.path=E:\\BuildServer\\OracleJDBC\\ojdbc8.jar -Dsonar.testExecutionReportPaths=utplsql_sonar_test.xml -Dsonar.coverageReportPaths=utplsql_sonar_coverage.xml'
+                                }
+                            }
+                        }    
+                        stage("Sonar Quality Gate"){
+                            steps{
+                                echo "Skipping Sonar Quality gate - tech issues to be resolved by Ent Devops team"
+                                // timeout(time: 5, unit: 'MINUTES') { // Just in case something goes wrong, pipeline will be killed after a timeout
+                                //     waitForQualityGate abortPipeline: false
+                                // }
+                            }
+                        }
+                        stage("Git_vs_DB") {
+                            environment {
+                                DEVOPS_DB_CRED = credentials('GCM-DEVOPS-DB-TCGACDS-RW')
+                                DEVOPS_DB_CONN_STR = "${db_props['db.oracle.url.devops']}"  
+                                //SQL_COMPILE_FILE = "${db_util.getFilePath("Compile.sql")}"
+                            }     
+                            when {not {expression { params.SkipCompare} } }
+                            steps{
+                                powershell label: 'Executing install/Rollback sql', script: "${db_util.getFilePath("compareDBvsGit.ps1")}"
+                            }
+                        }    
+                        stage('Test') {   
+                        when {not {expression { params.SkipTests} } }
+                            steps {
+                                script{
+                                    readyAPIUtils.executeReadyAPITest('ALL','PT_v3',false)
+                                    readyAPIUtils.executeReadyAPITest('DC','PT_v4',false)
+                                    readyAPIUtils.executeReadyAPITest('DC','PT_v5',false)
+                                    readyAPIUtils.executeReadyAPITest('M2G','PT_v4',false)
+                                }
+                            }                         
+                        }
+                    }
+                }
+
+                stage("4. Regression") {
+                    when {  branch "REG" }
+                    environment { 
+                            DB_CRED = credentials('GCM-REG-DB-TCGACDS-RW')
+                            DB_CONN_STR = "${db_props['db.oracle.url.reg']}"
+                        
+                    }  
+                    stages{
+                        stage('Toad Code Analysis'){
+                            steps {
+                                echo 'Toad Code Analysis'
+                                powershell label: 'Running Code Analysis', script: "${db_util.getFilePath("codeanalysis.ps1")}"           
+                            }
+                        }    
+                        stage('Deploy') {       
+                            steps {
+                                powershell label: 'Executing install/Rollback sql', script: "${db_util.getFilePath("executescript.ps1")}"
+                                powershell label: 'trigger insert sql, ignore when not main branch', script: "${db_util.getFilePath("insertdbscript.ps1")}"
+                                //powershell label: 'Running compile script', script: '.\\CICD\\Compile.sql' 
+//Compile.sql needs to be merged to the install script and rollback  
+//C:\AllRepos\sce-td-gcm-jenkins-repo\JenkinsFile\db\gcis-sql-execution\Jenkinsfile   
+                                archiveArtifacts artifacts: 'CICD/*.sql,CICD/*.log,CICD/*.html,CICD/*.csv,CICD/*.txt,*.log,output/*', followSymlinks: false
+                                build wait: false,job: '/GCM/DB/gcis-data-schema-compare', parameters: [string(name: 'Source_DB_Environment', value: 'ST'), string(name: 'Target_DB_Environment', value: 'REGR')]
+             
+                            } 
+                            post {
+                                aborted{
+                                echo "Deploy stage has been aborted"
+                            }
+                            }    
+                        } 
+                        stage('utPLSQL Unit Test') {   
+                            steps {
+                                script{   
+                                    bat 'E:/BuildServer/installables/utPLSQL-cli/utPLSQL-cli/bin/utplsql run %DB_CRED_USR%/%DB_CRED_PSW%%DB_CONN_STR% -f=UT_JUNIT_REPORTER -o=utplsql_junit.xml -f=UT_COVERAGE_SONAR_REPORTER -o=utplsql_sonar_coverage.xml -s -f=UT_SONAR_TEST_REPORTER -o=utplsql_sonar_test.xml --failure-exit-code=0 -source_path=./Resources'
+                                    archiveArtifacts artifacts: 'utplsql*.xml', followSymlinks: false
+                                    junit 'utplsql_junit.xml'
+                                }                        
+                            }
+                        }  
+                        stage('SonarQube Code Analysis'){
+                            tools {  jdk 'jdk17' }  
+                            environment { scannerHome = tool 'SonarQubeScanner' }              
+                            steps{
+                                withSonarQubeEnv(installationName: 'EnterpriseDevops-SonarQubeServer', credentialsId: 'EnterpriseDevops-SonarToken') {
+                                bat '%scannerHome%/bin/sonar-scanner -Dsonar.projectKey=com.sce.db.oracle:gcis-connectivity-oracle -Dsonar.projectName=gcis-connectivity-oracle -Dsonar.newCode.referenceBranch=master -Dsonar.sourceEncoding=UTF-8 -Dsonar.sources=. -Dsonar.exclusions=**/output/**,**/Tables/**,**/MetaData/**,**/Index/**,**/Grants/**,**/PBIQueries/**,**/Sequences/**,**/CICD/** -Dsonar.plsql.defaultSchema=TCGACDS -Dsonar.plsql.jdbc.url=jdbc:oracle:thin:%DB_CONN_STR% -Dsonar.plsql.jdbc.user=%DB_CRED_USR% -Dsonar.plsql.jdbc.password=%DB_CRED_PSW% -Dsonar.plsql.jdbc.driver.class=oracle.jdbc.OracleDriver -Dsonar.plsql.jdbc.driver.path=E:\\BuildServer\\OracleJDBC\\ojdbc8.jar -Dsonar.testExecutionReportPaths=utplsql_sonar_test.xml -Dsonar.coverageReportPaths=utplsql_sonar_coverage.xml'
+                                }
+                            }
+                        }    
+                        stage("Sonar Quality Gate"){
+                            steps{
+                                echo "Skipping Sonar Quality gate - tech issues to be resolved by Ent Devops team"
+                                // timeout(time: 5, unit: 'MINUTES') { // Just in case something goes wrong, pipeline will be killed after a timeout
+                                //     waitForQualityGate abortPipeline: false
+                                // }
+                            }
+                        }
+                        stage("Git_vs_DB"){
+                            environment {
+                                DEVOPS_DB_CRED = credentials('GCM-DEVOPS-DB-TCGACDS-RW')
+                                DEVOPS_DB_CONN_STR = "${db_props['db.oracle.url.devops']}"  
+                                //SQL_COMPILE_FILE = "${db_util.getFilePath("Compile.sql")}"
+                            }     
+                            when {not {expression { params.SkipCompare} } }
+                            steps{
+                                powershell label: 'Executing install/Rollback sql', script: "${db_util.getFilePath("compareDBvsGit.ps1")}"
+                            }
+                        }
+                        stage('Test') {   
+                        when {not {expression { params.SkipTests} } }
+                            steps {
+                                script{
+                                    readyAPIUtils.executeReadyAPITest('ALL','REGR_v3',false)
+                                    readyAPIUtils.executeReadyAPITest('DC','REGR_v4',false)
+                                    readyAPIUtils.executeReadyAPITest('DC','REGR_v5',false)
+                                    readyAPIUtils.executeReadyAPITest('M2G','REGR_v4',false)
+                                }
+                            }
+                        }      
+                    }
+                } 
+
+                stage("5. Production") {
+                    when {  branch "master" }
+                    environment {
+                        DB_CRED = credentials('GCM-PROD-DB-TCGACDS-RW')
+                        DB_CONN_STR = "${db_props['db.oracle.url.prod']}"
+                        
+                    }  
+                    stages{
+                        stage('Toad Code Analysis'){
+                            steps {
+                                echo 'Toad Code Analysis'
+                                powershell label: 'Running Code Analysis', script: "${db_util.getFilePath("codeanalysis.ps1")}"           
+
+                            }
+                        }    
+                        stage('Deploy') {     
+                            steps {
+                                script{
+                                    def permittedUsersInput = "${db_props['db.oracle.permitterusers.prod']}"
+                                    echo "Approval is required for Production Deployment by ${permittedUsersInput} or DevSecOps Adminstrators"
+                                    def approver= input id: 'AccessCheckID', message: 'Proceed with the execution in Prod', submitter: "${permittedUsersInput}", submitterParameter: 'approver'
+                                    echo "Approval is provided for Production Deployment by: ${approver}"
+                                    //buildName "#${env.BUILD_NUMBER} - ${ENVIRONMENT} - ${release_props['gcm.release.prod.crq']}"  
+                                }
+                                powershell label: 'Executing install/Rollback sql', script: "${db_util.getFilePath("executescript.ps1")}"
+                                powershell label: 'trigger insert sql, ignore when not main branch', script: "${db_util.getFilePath("insertdbscript.ps1")}"
+                                 //powershell label: 'Running compile script', script: '.\\CICD\\Compile.sql' 
+                                 archiveArtifacts artifacts: 'CICD/*.sql,CICD/*.log,CICD/*.html,CICD/*.csv,CICD/*.txt,*.log,output/*', followSymlinks: false
+                                 build wait: false,job: '/GCM/DB/gcis-data-schema-compare', parameters: [string(name: 'Source_DB_Environment', value: 'REG'), string(name: 'Target_DB_Environment', value: 'PROD')]
+                            } 
+                            post {
+                                aborted{
+                                echo "Deploy stage has been aborted"
+                            }
+                            }    
+                        } 
+                        stage('utPLSQL Unit Test') { 
+                            steps {
+                                script{   
+                                    bat 'E:/BuildServer/installables/utPLSQL-cli/utPLSQL-cli/bin/utplsql run %DB_CRED_USR%/%DB_CRED_PSW%%DB_CONN_STR% -f=UT_JUNIT_REPORTER -o=utplsql_junit.xml -f=UT_COVERAGE_SONAR_REPORTER -o=utplsql_sonar_coverage.xml -s -f=UT_SONAR_TEST_REPORTER -o=utplsql_sonar_test.xml --failure-exit-code=0 -source_path=./Resources'
+                                    archiveArtifacts artifacts: 'utplsql*.xml', followSymlinks: false
+                                    junit 'utplsql_junit.xml'
+                                }                        
+                            }
+                        }  
+                        stage('SonarQube Code Analysis'){
+                            tools {  jdk 'jdk17' }  
+                            environment { scannerHome = tool 'SonarQubeScanner' }              
+                            steps{
+                                withSonarQubeEnv(installationName: 'EnterpriseDevops-SonarQubeServer', credentialsId: 'EnterpriseDevops-SonarToken') {
+                                bat '%scannerHome%/bin/sonar-scanner -Dsonar.projectKey=com.sce.db.oracle:gcis-connectivity-oracle -Dsonar.projectName=gcis-connectivity-oracle -Dsonar.newCode.referenceBranch=master -Dsonar.sourceEncoding=UTF-8 -Dsonar.sources=. -Dsonar.exclusions=**/output/**,**/Tables/**,**/MetaData/**,**/Index/**,**/Grants/**,**/PBIQueries/**,**/Sequences/**,**/CICD/** -Dsonar.plsql.defaultSchema=TCGACDS -Dsonar.plsql.jdbc.url=jdbc:oracle:thin:%DB_CONN_STR% -Dsonar.plsql.jdbc.user=%DB_CRED_USR% -Dsonar.plsql.jdbc.password=%DB_CRED_PSW% -Dsonar.plsql.jdbc.driver.class=oracle.jdbc.OracleDriver -Dsonar.plsql.jdbc.driver.path=E:\\BuildServer\\OracleJDBC\\ojdbc8.jar -Dsonar.testExecutionReportPaths=utplsql_sonar_test.xml -Dsonar.coverageReportPaths=utplsql_sonar_coverage.xml'
+                                }
+                            }
+                        }    
+                        stage("Sonar Quality Gate"){
+                            steps{
+                                echo "Skipping Sonar Quality gate - tech issues to be resolved by Ent Devops team"
+                                // timeout(time: 5, unit: 'MINUTES') { // Just in case something goes wrong, pipeline will be killed after a timeout
+                                //     waitForQualityGate abortPipeline: false
+                                // }
+                            }
+                        } 
+                        stage("Git_vs_DB") {
+                            environment {
+                                DEVOPS_DB_CRED = credentials('GCM-DEVOPS-DB-TCGACDS-RW')
+                                DEVOPS_DB_CONN_STR = "${db_props['db.oracle.url.devops']}"  
+                                //SQL_COMPILE_FILE = "${db_util.getFilePath("Compile.sql")}"
+                            }     
+                            when {not {expression { params.SkipCompare} } }
+                            steps{
+                                powershell label: 'Executing install/Rollback sql', script: "${db_util.getFilePath("compareDBvsGit.ps1")}"
+                            }
+                        }  
+                        stage('Test') {  
+                            when {not {expression { params.SkipTests} } }
+                            steps {
+                                script{
+                                    readyAPIUtils.executeReadyAPITest('ALL','PROD_v3',false)
+                                    readyAPIUtils.executeReadyAPITest('DC','PROD_v4',false)
+                                    readyAPIUtils.executeReadyAPITest('DC','PROD_v5',false)
+                                    readyAPIUtils.executeReadyAPITest('M2G','PROD_v4',false)
+                                }
+                            }
+                        }    
+                    }
+                } 
+
+                stage("6. Break Fix") {
+                    when {  branch "breakfix" }
+                    environment {
+                            DB_CRED = credentials('GCM-HF-DB-L982-TCGACDS-RW')
+                            DB_CONN_STR = "${db_props['db.oracle.url.bf']}"
+                    }  
+                    stages{
+                        stage('Toad Code Analysis'){
+                            steps {
+                                echo 'Toad Code Analysis'
+                                powershell label: 'Running Code Analysis', script: "${db_util.getFilePath("codeanalysis.ps1")}"                   
+                            }
+                        }    
+                        stage('Deploy') {       
+                            steps {
+                                
+                                powershell label: 'Executing install/Rollback sql', script: "${db_util.getFilePath("executescript.ps1")}"
+                                powershell label: 'trigger insert sql, ignore when not main branch', script: "${db_util.getFilePath("insertdbscript.ps1")}"
+                                //powershell label: 'Running compile script', script: '.\\CICD\\Compile.sql'  
+                                archiveArtifacts artifacts: 'CICD/*.sql,CICD/*.log,CICD/*.html,CICD/*.csv,CICD/*.txt,*.log,output/*', followSymlinks: false
+                                build wait: false,job: '/GCM/DB/gcis-data-schema-compare', parameters: [string(name: 'Source_DB_Environment', value: 'PROD'), string(name: 'Target_DB_Environment', value: 'BF')] 
+                                             
+                            } 
+                            post {
+                                aborted{
+                                echo "Deploy stage has been aborted"
+                            }
+                            }    
+                        }
+                        stage('utPLSQL Unit Test') {   
+                            steps {
+                                script{   
+                                    bat 'E:/BuildServer/installables/utPLSQL-cli/utPLSQL-cli/bin/utplsql run %DB_CRED_USR%/%DB_CRED_PSW%%DB_CONN_STR% -f=UT_JUNIT_REPORTER -o=utplsql_junit.xml -f=UT_COVERAGE_SONAR_REPORTER -o=utplsql_sonar_coverage.xml -s -f=UT_SONAR_TEST_REPORTER -o=utplsql_sonar_test.xml --failure-exit-code=0 -source_path=./Resources'
+                                    archiveArtifacts artifacts: 'utplsql*.xml', followSymlinks: false
+                                    junit 'utplsql_junit.xml'
+                                }                        
+                            }
+                        }   
+                        stage('SonarQube Code Analysis'){
+                            tools {  jdk 'jdk17' }  
+                            environment { scannerHome = tool 'SonarQubeScanner' }              
+                            steps{
+                                withSonarQubeEnv(installationName: 'EnterpriseDevops-SonarQubeServer', credentialsId: 'EnterpriseDevops-SonarToken') {
+                                bat '%scannerHome%/bin/sonar-scanner -Dsonar.projectKey=com.sce.db.oracle:gcis-connectivity-oracle -Dsonar.projectName=gcis-connectivity-oracle -Dsonar.newCode.referenceBranch=master -Dsonar.sourceEncoding=UTF-8 -Dsonar.sources=. -Dsonar.exclusions=**/output/**,**/Tables/**,**/MetaData/**,**/Index/**,**/Grants/**,**/PBIQueries/**,**/Sequences/**,**/CICD/** -Dsonar.plsql.defaultSchema=TCGACDS -Dsonar.plsql.jdbc.url=jdbc:oracle:thin:%DB_CONN_STR% -Dsonar.plsql.jdbc.user=%DB_CRED_USR% -Dsonar.plsql.jdbc.password=%DB_CRED_PSW% -Dsonar.plsql.jdbc.driver.class=oracle.jdbc.OracleDriver -Dsonar.plsql.jdbc.driver.path=E:\\BuildServer\\OracleJDBC\\ojdbc8.jar -Dsonar.testExecutionReportPaths=utplsql_sonar_test.xml -Dsonar.coverageReportPaths=utplsql_sonar_coverage.xml'
+                                }
+                            }
+                        }    
+                        stage("Sonar Quality Gate"){
+                            steps{
+                                echo "Skipping Sonar Quality gate - tech issues to be resolved by Ent Devops team"
+                                // timeout(time: 5, unit: 'MINUTES') { // Just in case something goes wrong, pipeline will be killed after a timeout
+                                //     waitForQualityGate abortPipeline: false
+                                // }
+                            }
+                        } 
+                        stage("Git_vs_DB"){
+                            environment {
+                                DEVOPS_DB_CRED = credentials('GCM-DEVOPS-DB-TCGACDS-RW')
+                                DEVOPS_DB_CONN_STR = "${db_props['db.oracle.url.devops']}"  
+                                //SQL_COMPILE_FILE = "${db_util.getFilePath("Compile.sql")}"
+                            }     
+                            when {not {expression { params.SkipCompare} } }
+                            steps{
+                                powershell label: 'Executing install/Rollback sql', script: "${db_util.getFilePath("compareDBvsGit.ps1")}"
+                            }
+                        }  
+                        stage('Test') {   
+                        when {not {expression { params.SkipTests} } }
+                            steps {
+                                script{
+                                    readyAPIUtils.executeReadyAPITest('ALL','BF_v3',false)
+                                    readyAPIUtils.executeReadyAPITest('DC','BF_v4',false)
+                                    readyAPIUtils.executeReadyAPITest('DC','BF_v5',false)
+                                    readyAPIUtils.executeReadyAPITest('M2G','BF_v4',false)
+                                }
+                            }
+                        }          
+                    }
+                } 
+                //changes for devops dryrun (L986 DB)
+                stage("7. DEVOPS") {
+                    when {  branch "devops" }
+                    environment {
+                            DB_CRED = credentials('GCM-DEVOPS-DB-TCGACDS-RW')
+                            DB_CONN_STR = "${db_props['db.oracle.url.devops']}"
+                    
+                    }  
+                    stages{
+                        stage('Toad Code Analysis'){
+                            steps {
+                                echo 'Toad Code Analysis'
+                                powershell label: 'Running Code Analysis', script: "${db_util.getFilePath("codeanalysis.ps1")}"           
+                                         
+                            }
+                        }    
+                        stage('Deploy') {       
+                            steps {
+                                
+                                powershell label: 'Executing install/Rollback sql', script: "${db_util.getFilePath("executescript.ps1")}"
+                                powershell label: 'trigger insert sql, ignore when not main branch', script: "${db_util.getFilePath("insertdbscript.ps1")}"
+                                //powershell label: 'Running compile script', script: '.\\CICD\\Compile.sql'  
+                                archiveArtifacts artifacts: 'CICD/*.sql,CICD/*.log,CICD/*.html,CICD/*.csv,CICD/*.txt,*.log,output/*', followSymlinks: false
+                            } 
+                            post {
+                                aborted{
+                                echo "Deploy stage has been aborted"
+                            }
+                            }    
+                        }
+                        stage('utPLSQL Unit Test') {   
+                            steps {
+                                script{   
+                                    bat 'E:/BuildServer/installables/utPLSQL-cli/utPLSQL-cli/bin/utplsql run %DB_CRED_USR%/%DB_CRED_PSW%%DB_CONN_STR% -f=UT_JUNIT_REPORTER -o=utplsql_junit.xml -f=UT_COVERAGE_SONAR_REPORTER -o=utplsql_sonar_coverage.xml -s -f=UT_SONAR_TEST_REPORTER -o=utplsql_sonar_test.xml --failure-exit-code=0 -source_path=./Resources'
+                                    archiveArtifacts artifacts: 'utplsql*.xml', followSymlinks: false
+                                    junit 'utplsql_junit.xml'
+                                }                        
+                            }
+                        }
+                        stage('SonarQube Code Analysis'){
+                            tools {  jdk 'jdk17' }  
+                            environment { scannerHome = tool 'SonarQubeScanner' }              
+                            steps{
+                                withSonarQubeEnv(installationName: 'EnterpriseDevops-SonarQubeServer', credentialsId: 'EnterpriseDevops-SonarToken') {
+                                bat '%scannerHome%/bin/sonar-scanner -Dsonar.projectKey=com.sce.db.oracle:gcis-connectivity-oracle -Dsonar.projectName=gcis-connectivity-oracle -Dsonar.newCode.referenceBranch=master -Dsonar.sourceEncoding=UTF-8 -Dsonar.sources=. -Dsonar.exclusions=**/output/**,**/Tables/**,**/MetaData/**,**/Index/**,**/Grants/**,**/PBIQueries/**,**/Sequences/**,**/CICD/** -Dsonar.plsql.defaultSchema=TCGACDS -Dsonar.plsql.jdbc.url=jdbc:oracle:thin:%DB_CONN_STR% -Dsonar.plsql.jdbc.user=%DB_CRED_USR% -Dsonar.plsql.jdbc.password=%DB_CRED_PSW% -Dsonar.plsql.jdbc.driver.class=oracle.jdbc.OracleDriver -Dsonar.plsql.jdbc.driver.path=E:\\BuildServer\\OracleJDBC\\ojdbc8.jar -Dsonar.testExecutionReportPaths=utplsql_sonar_test.xml -Dsonar.coverageReportPaths=utplsql_sonar_coverage.xml'
+                                }
+                            }
+                        }    
+                        stage("Sonar Quality Gate"){
+                            steps{
+                                echo "Skipping Sonar Quality gate - tech issues to be resolved by Ent Devops team"
+                                // timeout(time: 5, unit: 'MINUTES') { // Just in case something goes wrong, pipeline will be killed after a timeout
+                                //     waitForQualityGate abortPipeline: false
+                                // }
+                            }
+                        }      
+                        stage('Test') {   
+                        when {not {expression { params.SkipTests} } }
+                            steps 
+                                {
+                                script{
+                                    echo "commenting testing pipeline "
+                                // readyAPIUtils.executeReadyAPITest('ALL','BF_v2',false) 
+                                // readyAPIUtils.executeReadyAPITest('ALL','BF_v3',false) 
+                                }
+                                }
+                        }                         
+                    }
+                }
+
+            }
+        }
+    }
+    post { 
+        always { 
+            archiveArtifacts artifacts: 'CICD/*.sql,CICD/*.log,CICD/*.html,CICD/*.csv,CICD/*.txt,*.log,output/*', followSymlinks: false
+            publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'output', reportFiles: 'CodeAnalysisReport.html', reportName: 'Code Analysis Report', reportTitles: 'CodeAnalysisReport'])
+            cleanWs()
+        } 
+        success {
+            office365ConnectorSend color: '#00FF00', message: "Completed ${env.BRANCH_NAME} ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Success', webhookUrl: "${getJenkinsWebhookURL()}"
+        }
+        failure{
+            office365ConnectorSend color: '#FF0000', message: "Completed ${env.BRANCH_NAME} ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Failure', webhookUrl: "${getJenkinsWebhookURL()}"
+        }
+    }
+}

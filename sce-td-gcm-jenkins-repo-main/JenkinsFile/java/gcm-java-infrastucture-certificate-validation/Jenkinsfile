@@ -1,0 +1,168 @@
+#!groovy
+import java.net.URI
+import java.security.cert.Certificate
+//import java.security.cert.Certificate
+import javax.net.ssl.HttpsURLConnection
+def java_props
+// Path to cacerts file
+//def cacerts = "E:\Java\jre1.8.0_144\lib\security"
+def validateJavaServer(String env,String url){
+    def cred
+    def remote = [:]
+    if("PROD" == "${env}") {
+        cred = "GCM_JAVA_SERVER_NONPROD_CRED"
+    }else{                        
+        cred = "GCM_JAVA_SERVER_NONPROD_CRED"
+    }
+    remote.name = new URI("${url}").getHost()
+    remote.host = new URI("${url}").getHost()
+    remote.allowAnyHosts = true
+    echo "validateJavaServer:env:${env},URL:${url},Host:${remote.host},Credential Id:${cred}"
+    withCredentials([usernamePassword(credentialsId: "${cred}", passwordVariable: 'pass', usernameVariable: 'user')]) {
+        remote.user = user
+        remote.password = pass
+        //sshCommand remote: remote, command: 'ls -lrt'
+        sshScript remote: remote, script: 'JenkinsFile/java/gcm-java-infrastucture-certificate-validation/gcmservervalidation.sh'
+        // Get and verify server certificate chain
+        //URL destinationURL = new URL("https://iewvdjnk01.sce.eix.com:8443")
+        //HttpsURLConnection conn = (HttpsURLConnection) destinationURL.openConnection()
+        //conn.connect()
+        //Certificate[] certs = conn.getServerCertificates()
+        //for (Certificate cert : certs) {
+        //    echo "Certificate is: ${cert}"
+        //    if (cert instanceof Certificate) {
+        //       try {
+        //        //find the command to fetch the certificate from the cacert file eg: netskope in cacerts file
+        //       //keytool -list -v -keystore ${keystore.file}
+        //       ((Certificate) cert).checkValidity()
+        //       echo "Certificate is active for current date"
+        //       } catch (Exception e) {
+        //            echo "Certificate is expired or invalid: ${e.message}"
+        //       }
+        //    }
+       // }
+    }
+}
+pipeline {
+    agent any 
+    parameters {  
+        choice (name: 'ENVIRONMENT', choices: ['DEV','ST','PT','REGR','BF','PROD','ALL'], description: 'Please choose Environment') 
+    }
+    options {
+        office365ConnectorWebhooks([[name: "${env.JOB_NAME}", notifyAborted: true, notifyBackToNormal: true, notifyFailure: true, notifyNotBuilt: true, notifyRepeatedFailure: true, notifySuccess: true, notifyUnstable: true, startNotification: true, url: "${getJenkinsWebhookURL()}"]])
+        buildDiscarder logRotator(artifactDaysToKeepStr: '30', artifactNumToKeepStr: '30', daysToKeepStr: '30', numToKeepStr: '30')
+        disableConcurrentBuilds()
+        //timestamps()
+        skipDefaultCheckout(true)
+    }
+    stages {
+        stage('Initialize') { 
+            steps {  
+                script {  
+                    java_props = loadProperties("JAVA") 
+                    cleanWs()
+                    checkout scm
+                    currentBuild.displayName = "#${env.BUILD_NUMBER} - ${env.ENVIRONMENT}"
+                }
+            }
+        }
+        stage('Java Infrastructure Validation') {
+            parallel {
+                stage("0. DEV") {
+                    when {  
+                        anyOf{
+                            environment name: 'ENVIRONMENT', value: 'ALL' 
+                            environment name: 'ENVIRONMENT', value: 'DEV'              
+                        }
+                    }      
+                    steps {
+                        validateJavaServer("NONPROD","${java_props['java.server.url.dev']}")
+                    }
+                }    
+                stage("1. ST") {
+                    when {  
+                        anyOf{
+                            environment name: 'ENVIRONMENT', value: 'ALL' 
+                            environment name: 'ENVIRONMENT', value: 'ST'              
+                        }
+                    }      
+                    steps {
+                        validateJavaServer("NONPROD","${java_props['java.server.url.st.1']}")
+                        validateJavaServer("NONPROD","${java_props['java.server.url.st.2']}")
+                        validateJavaServer("NONPROD","${java_props['java.server.url.st.3']}")
+                        validateJavaServer("NONPROD","${java_props['java.server.url.st.4']}")
+                    }                    
+                }   
+                stage("2. PT") {
+                    when {  
+                        anyOf{
+                            environment name: 'ENVIRONMENT', value: 'ALL' 
+                            environment name: 'ENVIRONMENT', value: 'PT'              
+                        }
+                    }      
+                    steps {
+                        validateJavaServer("NONPROD","${java_props['java.server.url.pt.1']}")
+                        validateJavaServer("NONPROD","${java_props['java.server.url.pt.2']}")
+                        validateJavaServer("NONPROD","${java_props['java.server.url.pt.3']}")
+                        validateJavaServer("NONPROD","${java_props['java.server.url.pt.4']}")
+                    }                    
+                }
+                stage("3. Regression") {
+                    when {  
+                        anyOf{
+                            environment name: 'ENVIRONMENT', value: 'ALL' 
+                            environment name: 'ENVIRONMENT', value: 'REGR'              
+                        }
+                    }      
+                    steps {
+                        validateJavaServer("NONPROD","${java_props['java.server.url.reg.1']}")
+                        validateJavaServer("NONPROD","${java_props['java.server.url.reg.2']}")
+                        validateJavaServer("NONPROD","${java_props['java.server.url.reg.3']}")
+                        validateJavaServer("NONPROD","${java_props['java.server.url.reg.4']}")
+                    }                   
+                } 
+                stage("4. Production") {
+                    when {  
+                        anyOf{
+                            environment name: 'ENVIRONMENT', value: 'ALL' 
+                            environment name: 'ENVIRONMENT', value: 'PROD'              
+                        }
+                    }     
+                    steps {
+                        validateJavaServer("PROD","${java_props['java.server.url.prod.1']}")
+                        validateJavaServer("PROD","${java_props['java.server.url.prod.2']}")
+                        validateJavaServer("PROD","${java_props['java.server.url.prod.3']}")
+                        validateJavaServer("PROD","${java_props['java.server.url.prod.4']}")
+                    }                   
+                } 
+                stage("5. Break Fix") {
+                when {  
+                    anyOf{
+                        environment name: 'ENVIRONMENT', value: 'ALL' 
+                        environment name: 'ENVIRONMENT', value: 'BF'              
+                    }
+                }     
+                    steps {
+                        validateJavaServer("PROD","${java_props['java.server.url.bf.1']}")
+                        validateJavaServer("PROD","${java_props['java.server.url.bf.2']}")
+                        validateJavaServer("PROD","${java_props['java.server.url.bf.3']}")
+                        validateJavaServer("PROD","${java_props['java.server.url.bf.4']}")
+                    }                   
+                } 
+            }
+        }
+    }
+    post { 
+        // always { 
+        //     //archiveArtifacts artifacts: 'JenkinsFile/gcis-data-quality-reports/sql/*.sql,JenkinsFile/gcis-data-quality-reports/sql-output/*.log,JenkinsFile/gcis-data-quality-reports/sql-trace/*.txt', followSymlinks: false
+        //     //archiveArtifacts artifacts: 'JenkinsFile/db/gcis-data-quality-reports/sql-output/*.log,JenkinsFile/db/gcis-data-quality-reports/sql-output/*.xls,JenkinsFile/db/gcis-data-quality-reports/sql-output/*.html', followSymlinks: false
+        //     //publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, keepAll: true, reportDir: 'JenkinsFile/db/gcis-data-quality-reports/sql-output', reportFiles: '*.html', reportName: "DQ-Report", reportTitles: "DQ Report - ${env.DQ_REPORT}"])
+        // }
+        success {
+            office365ConnectorSend color: '#00FF00', message: "Completed ${env.JOB_NAME} [${env.BUILD_NUMBER}](${env.BUILD_URL})", status: 'Success', webhookUrl: "${getJenkinsWebhookURL()}"            
+            }
+        failure{
+            office365ConnectorSend color: '#FF0000', message: "Completed ${env.BRANCH_NAME} ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Failure', webhookUrl: "${getJenkinsWebhookURL()}"
+        }
+    }
+}

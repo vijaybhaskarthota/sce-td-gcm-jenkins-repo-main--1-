@@ -1,0 +1,38 @@
+--Validation script: post MFL data load
+SET PAGESIZE 10000
+SET FEED OFF
+SET LINESIZE 270
+
+ 
+
+column Validations heading "Validations" Format A100
+column COUNT heading "COUNT" Format 9999999999 
+column Remarks heading "Remarks" Format A120
+
+ 
+
+SELECT 'Check manually if MFL file is present in the following NAS path: \\sce\workgroup\AppData\GCMR3Prod' AS VALIDATIONS, 
+1 AS COUNT, 'Expected file name:SubCktOverrideLookup-Admin Hierarchy.xlsx' AS REMARKS FROM DUAL
+union
+SELECT 'Validating the record got instered into the GCM_DER_TECHNOLOGY_TYPES_LOOK_UP table'  AS Validations , DATA_COUNT AS COUNT,
+(CASE WHEN DATA_COUNT >= 1 THEN 'PASS' ELSE 'FAIL' END) AS Remarks FROM (
+SELECT count(*) AS DATA_COUNT FROM  TCGACDS.GCM_DER_TECHNOLOGY_TYPES_LOOK_UP)
+union
+SELECT 'Validating the record got instered into the GCM_DER_TECHTYPE_INV_LOOK_UP table'  AS Validations , DATA_COUNT AS COUNT,
+(CASE WHEN DATA_COUNT >= 1 THEN 'PASS' ELSE 'FAIL' END) AS Remarks FROM (
+SELECT count(*) AS DATA_COUNT FROM  TCGACDS.GCM_DER_TECHTYPE_INV_LOOK_UP)
+union
+SELECT 'No. of Voltage Levels missing in GCM_SHORT_CIRCUIT_LOOK_UP_DATA' AS VALIDATIONS, COUNT_V AS COUNT,
+(CASE WHEN COUNT_V > 0 THEN '(Missing VOLTAGE_LEVEL for: '|| V_LEVEL|| ') check manually if the record looks same in SHORT CIRCUIT LOOK UP DATA sheet in MFL file' ELSE 'PASS' END) AS REMARKS FROM(
+SELECT LISTAGG(VOLTAGE,',') AS V_LEVEL, COUNT(VOLTAGE) AS COUNT_V 
+FROM (SELECT DISTINCT REPLACE(VOLTAGE, 'KV','') AS VOLTAGE FROM  TCGACDS.CIRCUIT_HEAD MINUS
+SELECT DISTINCT VOLTAGE_LEVEL FROM  TCGACDS.GCM_SHORT_CIRCUIT_LOOK_UP_DATA))
+union
+SELECT 'No. of Voltage Levels not having MAX_AMP_VALUE' AS VALIDATIONS, COUNT_V AS COUNT,
+ (CASE WHEN COUNT_V > 0 THEN '(Missing AMP_VALUE for: '|| V_LEVEL|| ') check manually if the record looks same in SHORT CIRCUIT LOOK UP DATA sheet in MFL file' ELSE 'PASS' END) AS REMARKS FROM 
+(SELECT LISTAGG(DISTINCT VOLTAGE_LEVEL, ' , ') AS V_LEVEL,
+COUNT(DISTINCT VOLTAGE_LEVEL) AS COUNT_V FROM  TCGACDS.GCM_SHORT_CIRCUIT_LOOK_UP_DATA WHERE MAX_AMP_VALUE IS NULL)
+union
+SELECT 'Validating the record got instered into the GCM_SUB_HIER_STANDARD_VOLTAGES table'  AS Validations , V_COUNT AS COUNT,
+(CASE WHEN V_COUNT >= 1 THEN 'PASS' ELSE 'FAIL' END) AS Remarks FROM (
+SELECT count(*) AS V_COUNT FROM  TCGACDS.GCM_SUB_HIER_STANDARD_VOLTAGES);

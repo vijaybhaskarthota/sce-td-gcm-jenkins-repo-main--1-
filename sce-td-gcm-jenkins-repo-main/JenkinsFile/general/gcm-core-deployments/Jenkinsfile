@@ -1,0 +1,166 @@
+def permittedUsersInput
+def intialInput() {
+    script {
+        def input1 = input message: "Proceed with stage: ${STAGE_NAME} ?", ok: 'Proceed',  parameters: [booleanParam(name: 'Skip', defaultValue: false, description: 'Skip and complete steps manually'),string(description: "Please provide comments", name: 'Comment')], submitter: "${env.permittedUsersInput}", submitterParameter: 'approver'
+        echo "Stage Name: ${STAGE_NAME} \nApprover: "+input1.approver+ "\nApprover Input Comments: "+input1.Comment+ "\nSkipping automated steps?: " +input1.Skip
+        return input1.Skip
+    }
+}
+def setBuildName(String prodCRQVal, String nonProdCRQVal) {    
+    script{
+        if("PROD" == "${ENVIRONMENT}") {
+            newBuildName="${env.BUILD_NUMBER} - ${ENVIRONMENT} - ${prodCRQVal}"
+        }else {
+           newBuildName="${env.BUILD_NUMBER} - ${ENVIRONMENT} - ${nonProdCRQVal}"
+        }
+        buildName "${newBuildName}"  
+    }
+}
+// def fmeExecution(String repo, String workspace, String publishParas){
+//     try{          
+//         def fmeutils = new FMEUtils()
+//         def fmeResult=fmeutils.executeFME("${ENVIRONMENT}", "${repo}", "${workspace}", "${publishParas}")        
+//     }catch (Exception excep){
+//         echo "${STAGE_NAME} -Exception: ${excep}"
+// }}
+def getBranchName(String env) {
+    branchName=""
+    switch("${env}") {
+        case 'DEV': 
+        branchName="DEV"  
+        break;
+        case 'ST': branchName="ST"  
+        break;
+        case 'PT': branchName="PT"  
+        break;
+        case 'REGR': branchName="REG" 
+        break;
+        case 'BF': branchName="STABLE" 
+        break;
+        case 'PROD': branchName="master" 
+        break;
+    }
+    echo "getBranchName - env is: ${env} - branchName is: ${branchName}"
+    return branchName
+}
+
+pipeline {
+    agent any              
+    environment {    
+        release_props= loadProperties("RELEASE")
+        permittedUsersInput = "${release_props['gcm.release.permitterusers.nonprod']}"
+        nonProdBuildName= "${release_props['gcm.release.non_prod.crq']}"
+        prodbuildName= "${release_props['gcm.release.prod.crq']}"
+    }          
+    options {
+        office365ConnectorWebhooks([[name: "${env.JOB_NAME}", notifyAborted: true, notifyBackToNormal: true, notifyFailure: true, notifyNotBuilt: true, notifyRepeatedFailure: true, notifySuccess: true, notifyUnstable: true, startNotification: true, url: "${getJenkinsWebhookURL()}"]])
+        buildDiscarder logRotator(artifactDaysToKeepStr: '30', artifactNumToKeepStr: '30', daysToKeepStr: '30', numToKeepStr: '30')
+        disableConcurrentBuilds()
+        timestamps()
+    }
+    parameters {  
+     choice (name: 'ENVIRONMENT', choices: ['DEV','ST','PT','REGR','BF','PROD'], description: 'Please choose Environment') 
+    }  
+    stages {
+        stage('GCM_Core_Deployments') {
+            parallel {
+                stage('Metadata_Insertion') {
+                    steps { 
+                        script {                        
+                            if(intialInput()) {
+                                return 
+                            }
+                            echo "${STAGE_NAME} - Stage needs mannual Execution"
+                        }
+                    }
+                }
+                stage('DB_Deployment') {
+                    steps { 
+                        script {
+                            echo "prodbuildName -${prodbuildName}  nonProdBuildName -${nonProdBuildName}"
+                            setBuildName("${prodbuildName}","${nonProdBuildName}")
+                            if(intialInput()) { 
+                                return 
+                            }
+                            branchName = getBranchName("${ENVIRONMENT}")
+                            jobResult = build propagate: false,job: "/GCM/DB/gcis-connectivity-oracle/${branchName}",parameters: [string(name: 'NUM_OF_COMMIT', value: "1"),string(name: 'ACTION', value: "INSTALL"),booleanParam(name: 'SkipTests', value: "true"),booleanParam(name: 'SkipCompare', value: "true")]
+                        }
+                    }
+                }      
+                stage('DB_Deployment_Validation') {
+                    steps { 
+                        script {      
+                            if(intialInput()) {
+                                return 
+                            }             
+                            def DB_PostDeploymentValidation = build propagate: false,job: "/GCM/Test/GCM-DataQualityReports",parameters: [string(name: 'ENVIRONMENT', value: "${ENVIRONMENT}"),string(name: 'DQ_REPORT', value: "DB_PostDeploymentValidation.sql")]
+                        }
+                    }
+                }
+                stage('Java_Deployment') {
+                    steps { 
+                        script { 
+                            if(intialInput()) { 
+                                return 
+                            }
+                            javaUtils = new JavaUtils()
+                            if("${ENVIRONMENT}" == "PROD") {
+                                javaUtils.executeAllServicePROD()
+                            } else {                            
+                                def input2 = input message: "Please provide more details for Java builds", ok: 'Proceed',  parameters: [booleanParam(name: 'releasePackage', defaultValue: false, description: 'Run Release builds for all Services?'),booleanParam(name: 'deployFromNexus', defaultValue: false, description: 'Skip compilation and Deploy from Nexus?')]
+                                echo "Stage Name: ${STAGE_NAME} \nApprover: "+input2.approver+ "\nNexus Release Package: "+input2.releasePackage+ "\nSkip compilation and Deploy from Nexus?: " +input2.deployFromNexus +"\nHardcoded to skip Test"+"\n${STAGE_NAME} - Automated execution Starting for ${ENVIRONMENT} ENVIRONMENT"
+                                serviceBranchName = getBranchName("${ENVIRONMENT}")
+                                javaUtils.executeAllServiceNonProdBuilds("${serviceBranchName}" ,input2.deployFromNexus ,input2.releasePackage ,true)
+                            }
+                        }
+                    }
+                }      
+                stage('FME_Deployment') {
+                    steps { 
+                        script {
+                            if(intialInput()) { 
+                                return 
+                            }
+                            branchName = getBranchName("${ENVIRONMENT}")
+                            jobResult = build propagate: false,job: "GCM/FME/gcis-fme/${branchName}",parameters: [string(name: 'NUM_OF_COMMIT', value: "1"),string(name: 'ACTION', value: "INSTALL"),booleanParam(name: 'SkipTests', value: "true")]
+                        }
+                    }
+                }      
+                stage('DP_Deployment') {
+                    steps{ 
+                        script {
+                            if(intialInput()){ return }
+                            branchName = getBranchName("${ENVIRONMENT}")
+                            jobResult = build propagate: false,job: "/GCM/DP/sce-ent-icoe-apigw-assetsandconnectivity/${branchName}",parameters: [string(name: 'NUM_OF_COMMIT', value: "1"),string(name: 'ACTION', value: "INSTALL"),booleanParam(name: 'SkipTests', value: "true")]
+                            jobResult = build propagate: false,job: "/GCM/DP/sce-ent-icoe-apigw-assetsandconnectivity/${branchName}",parameters: [string(name: 'NUM_OF_COMMIT', value: "1"),string(name: 'ACTION', value: "ENABLE_GCM_OUTAGE"),booleanParam(name: 'SkipTests', value: "true")]
+                        }
+                    }
+                }
+                stage('RedWood_Deployment') {
+                    steps{ 
+                        script {
+                            if(intialInput()) { 
+                                return 
+                            }
+                            echo "${STAGE_NAME} -- Stage needs mannual Execution"
+                        }
+                    }
+                }
+            } 
+        }
+    }
+    post{ 
+        always { 
+            archiveArtifacts artifacts: '*.txt', followSymlinks: false
+            setBuildName("${prodbuildName}","${nonProdBuildName}")
+            echo "Proceeding with Cleanup Activities"
+            cleanWs()
+        }
+        success {
+            office365ConnectorSend color: '#00FF00', message: "Completed ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Success', webhookUrl: "${getJenkinsWebhookURL()}",factDefinitions: [[name: "Build URL", template: "${env.BUILD_URL}"]]
+        }
+        failure{
+            office365ConnectorSend color: '#FF0000', message: "Completed ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Failure', webhookUrl: "${getJenkinsWebhookURL()}",factDefinitions: [[name: "Build URL", template: "${env.BUILD_URL}"]]
+        }
+    }       
+}

@@ -1,0 +1,399 @@
+#!groovy
+def fme_props
+def FMEUtil
+pipeline {
+    agent any 
+        parameters {
+        choice(name: 'NUM_OF_COMMIT', choices: ['1', '2', '3', '4','5','6','7', '8', '9', '10','20'], description: 'Select Num of commits')
+        choice(name: 'ACTION', choices: ['INSTALL', 'ROLLBACK'], description: 'Select Action')
+        }
+        options {
+        office365ConnectorWebhooks([[name: 'GCM-FME-Pipeline', notifyAborted: true, notifyBackToNormal: true, notifyFailure: true, notifyNotBuilt: true, notifyRepeatedFailure: true, notifySuccess: true, notifyUnstable: true, startNotification: true, url: "${getJenkinsWebhookURL()}"]])
+        buildDiscarder logRotator(artifactDaysToKeepStr: '30', artifactNumToKeepStr: '30', daysToKeepStr: '30', numToKeepStr: '30')
+        disableConcurrentBuilds()
+        timestamps()
+        //skipDefaultCheckout()
+        }
+    stages {
+        stage('Build') { 
+            when {
+                not {
+                    allOf {
+                        branch "master";
+                        expression {
+                            return currentBuild.getBuildCauses().any{cause -> cause.toString().contains('BranchIndexingCause')}
+                        }
+                    }
+                }  
+            }
+            steps {
+                script{
+                    fme_props = loadProperties("FME")
+                    FMEUtil = new FMEUtils()
+                    FMEUtil.createFMEWSList()
+                    // readyAPIUtils = new ReadyAPIUtils()
+                    try{
+                        collectBranchesToAlmOctane configurationId: 'cb826be3-f417-4ac7-81e5-eb62239438f0', credentialsId: 'git-svc-acct', filter: '', repositoryUrl: "${env.GIT_URL}", scmTool: 'github_cloud', workspaceId: '2001'
+                        collectPullRequestsToAlmOctane configurationId: 'cb826be3-f417-4ac7-81e5-eb62239438f0', credentialsId: 'git-svc-acct', repositoryUrl: "${env.GIT_URL}", scmTool: 'github_cloud', sourceBranchFilter: '', targetBranchFilter: '', workspaceId: '2001'
+                    }
+                    catch(Exception e){
+                        echo 'Exception occurred: ' + e.toString()    
+                    }
+                }
+            }  
+        }
+        stage('Deploy and Test in different Environments') {
+            when {
+                not {
+                    allOf {
+                        branch "master";
+                        expression {
+                            return currentBuild.getBuildCauses().any{cause -> cause.toString().contains('BranchIndexingCause')}
+                        }
+                    }
+                }  
+            }
+            parallel {
+                stage("1. DEV") {
+                    when { branch "DEV" }
+                    environment {
+                        FME_URL = "${fme_props['fme.server.url.dev']}"
+                        FME_TOKEN = "${fme_props['fme.server.token.dev']}"
+                    }  
+                    stages{
+                        stage('Deploy') {       
+                            steps {
+                                script{
+                                    if("${ACTION}" == "INSTALL"){ 
+                                        FMEUtil.installFMEWS()
+                                    }
+                                    else if("${ACTION}" == "ROLLBACK"){
+                                        FMEUtil.rollbackFMEWS()     
+                                    }
+                                }
+                            } 
+                            post {
+                                aborted{
+                                    echo "Deploy stage has been aborted"
+                                }
+                            }    
+                        }      
+                        stage('Test') { 
+                            steps {
+                                echo "Placeholder for Testing"                                
+                            }
+                        }                         
+                    }
+                }    
+                stage("2. ST") {
+                    when { branch "ST" }
+                    environment {
+                        FME_URL = "${fme_props['fme.server.url.st']}"
+                        FME_TOKEN = "${fme_props['fme.server.token.st']}"
+                    }  
+                    stages{
+                        stage('Deploy') {       
+                            steps {
+                                script{
+                                    if("${ACTION}" == "INSTALL"){ 
+                                        FMEUtil.installFMEWS()
+                                    }
+                                    else if("${ACTION}" == "ROLLBACK"){
+                                        FMEUtil.rollbackFMEWS()     
+                                    }
+                                }
+                            } 
+                            post {
+                                aborted{
+                                    echo "Deploy stage has been aborted"
+                                }
+                            }    
+                        }      
+                        stage('Test') { 
+                            steps {
+                                echo "Placeholder for Testing"                                
+                            }
+                        }                         
+                    }
+                }  
+
+                stage("3. PT") {
+                    when { branch "PT" }
+                    environment {
+                        FME_URL = "${fme_props['fme.server.url.pt']}"
+                        FME_TOKEN = "${fme_props['fme.server.token.pt']}"
+                    }  
+                    stages{
+                        stage('Deploy') {       
+                            steps {
+                                script{
+                                    if("${ACTION}" == "INSTALL"){ 
+                                        FMEUtil.installFMEWS()
+                                    }
+                                    else if("${ACTION}" == "ROLLBACK"){
+                                        FMEUtil.rollbackFMEWS()     
+                                    }
+                                }
+                            } 
+                            post {
+                                aborted{
+                                    echo "Deploy stage has been aborted"
+                                }
+                            }    
+                        }      
+                        stage('Test') { 
+                            steps {
+                                echo "Placeholder for Testing"                                
+                            }
+                        }                         
+                    }
+                } 
+
+                stage("4. Regression") {
+                    when { branch "REG" }
+                    environment {
+                        FME_URL = "${fme_props['fme.server.url.reg']}"
+                        FME_TOKEN = "${fme_props['fme.server.token.reg']}"
+                    }  
+                    stages{
+                        stage('Deploy') {       
+                            steps {
+                                script{
+                                    if("${ACTION}" == "INSTALL"){ 
+                                        FMEUtil.installFMEWS()
+                                    }
+                                    else if("${ACTION}" == "ROLLBACK"){
+                                        FMEUtil.rollbackFMEWS()     
+                                    }
+                                }
+                            } 
+                            post {
+                                aborted{
+                                    echo "Deploy stage has been aborted"
+                                }
+                            }    
+                        }      
+                        stage('Test') { 
+                            steps {
+                                echo "Placeholder for Testing"                                
+                            }
+                        }                         
+                    }
+                } 
+        stage("5. Production") {
+                    when { branch "master" }
+                    environment {
+                        FME_URL = "${fme_props['fme.server.url.prod']}"
+                        FME_TOKEN = "${fme_props['fme.server.token.prod']}"
+                    }  
+                    stages{
+                        stage('Deploy') {      
+                            steps {
+                                script{
+                                    if("${ACTION}" == "INSTALL"){ 
+                                        FMEUtil.installFMEWS()
+                                    }
+                                    else if("${ACTION}" == "ROLLBACK"){
+                                        FMEUtil.rollbackFMEWS()     
+                                    }
+                                }
+                            } 
+                            post {
+                                aborted{
+                                    echo "Deploy stage has been aborted"
+                                }
+                            }    
+                        }      
+                        stage('Test') {
+                            steps {
+                                echo "Placeholder for Testing"                                
+                            }
+                        }                         
+                    }
+                } 
+
+        //         stage("4. Regression") {
+        //         when {  branch "R6.1" }
+        //         environment { 
+        //                 DB_CRED = credentials('GCM-REG-DB-TCGACDS-RW')
+        //                 DB_CONN_STR = "${db_props['db.oracle.url.reg']}"
+                      
+        //         }  
+        //             stages{
+        //                 stage('Code Analysis'){
+        //                     steps {
+        //                         echo 'Code Analysis'
+        //                         powershell label: 'Running Code Analysis', script: '.\\CICD\\codeanalysis.ps1'  
+        //                         //echo 'Compare DB vs Git disabled'
+        //                         powershell label: 'Running Compare DB vs Git', script: '.\\CICD\\compareDBvsGit.ps1'             
+        //                     }
+        //                 }    
+        //                 stage('Deploy') {       
+        //                     steps {
+        //                         powershell label: 'Executing install/Rollback sql', script: '.\\CICD\\executescript.ps1'
+        //                         powershell label: 'Running compile script', script: '.\\CICD\\Compile.sql' 
+        //                         archiveArtifacts artifacts: 'CICD/*.sql,CICD/*.log,CICD/*.html,CICD/*.csv,CICD/*.txt,*.log,output/*', followSymlinks: false
+        //                         build wait: false,job: '/GCM/DB/gcis-data-schema-compare', parameters: [string(name: 'Source_DB_Environment', value: 'ST'), string(name: 'Target_DB_Environment', value: 'REG')]
+             
+        //                     } 
+        //                     post {
+        //                         aborted{
+        //                         echo "Deploy stage has been aborted"
+        //                     }
+        //                     }    
+        //                 }      
+        //                 stage('Test') { 
+        //                     steps 
+        //                         {
+        //                        script{
+        //                        readyAPIUtils.executeReadyAPITest('ALL','REGR',false)
+        //                              } 
+        //                         }
+        //                 }                         
+        //             }
+        //         } 
+
+        //         stage("5. Production") {
+        //         when {  branch "master" }
+        //         environment {
+        //                 DB_CRED = credentials('GCM-PROD-DB-TCGACDS-RW')
+        //                 DB_CONN_STR = "${db_props['db.oracle.url.prod']}"
+                       
+        //         }  
+        //             stages{
+        //                 stage('Code Analysis'){
+        //                     steps {
+        //                         echo 'Code Analysis'
+        //                         powershell label: 'Running Code Analysis', script: '.\\CICD\\codeanalysis.ps1'             
+        //                     }
+        //                 }    
+        //                 stage('Deploy') {       
+        //                     steps {
+        //                         script{
+        //                             def permittedUsersInput = "${db_props['db.oracle.permitterusers.prod']}"
+        //                             echo "Approval is required for Production Deployment by ${permittedUsersInput} or DevSecOps Adminstrators"
+        //                             def approver= input id: 'AccessCheckID', message: 'Proceed with the execution in Prod', submitter: "${permittedUsersInput}", submitterParameter: 'approver'
+        //                             echo "Approval is provided for Production Deployment by: ${approver}"
+        //                             buildName "#${env.BUILD_NUMBER} - ${ENVIRONMENT} - ${release_props['gcm.release.prod.crq']}"  
+        //                         }
+        //                          powershell label: 'Executing install/Rollback sql', script: '.\\CICD\\executescript.ps1'  
+        //                          powershell label: 'Running compile script', script: '.\\CICD\\Compile.sql' 
+        //                          archiveArtifacts artifacts: 'CICD/*.sql,CICD/*.log,CICD/*.html,CICD/*.csv,CICD/*.txt,*.log,output/*', followSymlinks: false
+        //                          build wait: false,job: '/GCM/DB/gcis-data-schema-compare', parameters: [string(name: 'Source_DB_Environment', value: 'REG'), string(name: 'Target_DB_Environment', value: 'PROD')]
+        //                     } 
+        //                     post {
+        //                         aborted{
+        //                         echo "Deploy stage has been aborted"
+        //                     }
+        //                     }    
+        //                 }      
+        //                 stage('Test') { 
+        //                     steps {
+        //                        script{
+        //                       readyAPIUtils.executeReadyAPITest('ALL','PROD',false) 
+        //                         }
+        //                     }
+        //                 }                         
+        //             }
+        //         } 
+
+                stage("6. Break Fix") {
+                when {  branch "breakfix" }
+                environment {
+                        DB_CRED = credentials('GCM-HF-DB-L982-TCGACDS-RW')
+                        DB_CONN_STR = "${db_props['db.oracle.url.bf']}"
+                    
+                }  
+                    stages{
+                        stage('Code Analysis'){
+                            steps {
+                                echo 'Code Analysis'
+                                powershell label: 'Running Code Analysis', script: '.\\CICD\\codeanalysis.ps1'             
+                            }
+                        }    
+                        stage('Deploy') {       
+                            steps {
+                                
+                                powershell label: 'Executing install/Rollback sql', script: '.\\CICD\\executescript.ps1'
+                                powershell label: 'Running compile script', script: '.\\CICD\\Compile.sql'  
+                                archiveArtifacts artifacts: 'CICD/*.sql,CICD/*.log,CICD/*.html,CICD/*.csv,CICD/*.txt,*.log,output/*', followSymlinks: false
+                                build wait: false,job: '/GCM/DB/gcis-data-schema-compare', parameters: [string(name: 'Source_DB_Environment', value: 'PROD'), string(name: 'Target_DB_Environment', value: 'BF')] 
+                                                
+                            } 
+                            post {
+                                aborted{
+                                echo "Deploy stage has been aborted"
+                            }
+                            }    
+                        }      
+                        stage('Test') { 
+                            steps 
+                                {
+                                script{
+                                readyAPIUtils.executeReadyAPITest('ALL','BF',false) 
+                                    }
+                                }
+                        }                         
+                    }
+                } 
+        //         //changes for devops dryrun (L986 DB)
+        //         stage("7. DEVOPS") {
+        //         when {  branch "devops" }
+        //         environment {
+        //                 DB_CRED = credentials('GCM-DEVOPS-DB-TCGACDS-RW')
+        //                 DB_CONN_STR = "${db_props['db.oracle.url.devops']}"
+                   
+        //         }  
+        //             stages{
+        //                 stage('Code Analysis'){
+        //                     steps {
+        //                         echo 'Code Analysis'
+        //                         powershell label: 'Running Code Analysis', script: '.\\CICD\\codeanalysis.ps1'             
+        //                     }
+        //                 }    
+        //                 stage('Deploy') {       
+        //                     steps {
+                                
+        //                         powershell label: 'Executing install/Rollback sql', script: '.\\CICD\\executescript.ps1'
+        //                         powershell label: 'Running compile script', script: '.\\CICD\\Compile.sql'  
+        //                         archiveArtifacts artifacts: 'CICD/*.sql,CICD/*.log,CICD/*.html,CICD/*.csv,CICD/*.txt,*.log,output/*', followSymlinks: false
+                                 
+                                             
+        //                     } 
+        //                     post {
+        //                         aborted{
+        //                         echo "Deploy stage has been aborted"
+        //                     }
+        //                     }    
+        //                 }      
+        //                 stage('Test') { 
+        //                     steps 
+        //                         {
+        //                      script{
+        //                        readyAPIUtils.executeReadyAPITest('ALL','BF',false) 
+        //                             }
+        //                         }
+        //                 }                         
+        //             }
+        //         }
+
+            }
+        }
+
+    }
+    post { 
+        always { 
+           // archiveArtifacts artifacts: 'output/*', followSymlinks: false
+            echo "Proceeding with Cleanup Activities"
+            cleanWs()
+        }
+        success {
+            office365ConnectorSend color: '#00FF00', message: "Completed ${env.BRANCH} ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Success', webhookUrl: "${getJenkinsWebhookURL()}"
+        }
+        failure{
+            office365ConnectorSend color: '#FF0000', message: "Completed ${env.BRANCH} ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Failure', webhookUrl: "${getJenkinsWebhookURL()}"
+        }
+
+
+    }
+}

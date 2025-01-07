@@ -1,0 +1,174 @@
+#!groovy
+def db_props
+def release_props
+def db_util
+pipeline {
+    agent any  
+    parameters {
+        choice(name: 'NUM_OF_COMMIT', choices: ['1', '2', '3', '4','5','6','7', '8', '9', '10','20'], description: 'Select Num of commits')
+    }
+    options {
+        office365ConnectorWebhooks([[name: "${env.JOB_NAME}", notifyAborted: true, notifyBackToNormal: true, notifyFailure: true, notifyNotBuilt: true, notifyRepeatedFailure: true, notifySuccess: true, notifyUnstable: true, startNotification: true, url: "${getJenkinsWebhookURL()}"]])
+        buildDiscarder logRotator(artifactDaysToKeepStr: '30', artifactNumToKeepStr: '30', daysToKeepStr: '30', numToKeepStr: '30')
+        disableConcurrentBuilds()
+        timestamps()
+    }
+    stages {
+        stage('Build') { 
+            when {
+                not {
+                    expression {
+                        return currentBuild.getBuildCauses().any{cause -> cause.toString().contains('BranchIndexingCause')}
+                    }
+                }  
+            }
+            steps {
+                script {
+                    db_props = loadProperties("DB")
+                    db_util = new DBUtils()
+                    currentBuild.displayName = "#${env.BUILD_NUMBER} - ${env.BRANCH_NAME}"
+                    env.SQL_COMPILE_FILE = "${db_util.getFilePath("Compile.sql")}"
+                    powershell label: 'Generating install sql', script: "${db_util.getFilePath("installscriptcreator.ps1")}"
+                    powershell label: 'Generating the rollback sql', script: "${db_util.getFilePath("rollbackscriptcreator.ps1")}"
+                }
+                archiveArtifacts artifacts: 'CICD/*.sql,CICD/*.log,*.log,output/*', followSymlinks: false
+            }
+        }
+        stage('Compare') {
+            when {
+                not {
+                    expression {
+                        return currentBuild.getBuildCauses().any{cause -> cause.toString().contains('BranchIndexingCause')}
+                    } 
+                }  
+            }
+            parallel {
+                stage("1. DEV") {
+                    when {   branch "DEV"  }
+                    stages {
+                        stage("Git_vs_DB") {
+                            environment {
+                                DB_CRED = credentials('GCM-Non-ADMS-Dev-DB-TCGACDS-RW')
+                                DB_CONN_STR = "${db_props['db.oracle.url.dev']}"
+                                DEVOPS_DB_CRED = credentials('GCM-DEVOPS-DB-TCGACDS-RW')
+                                DEVOPS_DB_CONN_STR = "${db_props['db.oracle.url.devops']}"
+                            }     
+                            steps{
+                                //lock(resource: 'gitvsDBcompare') {
+                                    powershell label: 'Executing GitvdDB compare', script: "${db_util.getFilePath("compareDBvsGit.ps1")}"
+                                //}  
+                            }
+                        }           
+                    }   
+                }                            
+
+                stage("2. ST") {
+                    when {   branch "ST"  }
+                    environment {
+                            DB_CRED = credentials('GCM-Non-ADMS-ST-DB-TCGACDS-RW')
+                            DB_CONN_STR = "${db_props['db.oracle.url.st']}"
+                    }  
+                    stages{
+                        stage("Git_vs_DB") {
+                            environment {
+                                DEVOPS_DB_CRED = credentials('GCM-DEVOPS-DB-TCGACDS-RW')
+                                DEVOPS_DB_CONN_STR = "${db_props['db.oracle.url.devops']}"
+                            }
+                            steps{
+                                powershell label: 'Executing GitvdDB compare', script: "${db_util.getFilePath("compareDBvsGit.ps1")}"
+                            }
+                        }                       
+                    }
+                }   
+
+                stage("3. PT") {
+                    when {  branch "PT" }
+                    environment {
+                            DB_CRED = credentials('GCM-PT-DB-TCGACDS-RW')
+                            DB_CONN_STR = "${db_props['db.oracle.url.pt']}"
+                    }  
+                    stages{
+                        stage("Git_vs_DB") {
+                            environment {
+                                DEVOPS_DB_CRED = credentials('GCM-DEVOPS-DB-TCGACDS-RW')
+                                DEVOPS_DB_CONN_STR = "${db_props['db.oracle.url.devops']}"
+                            }
+                            steps{
+                                powershell label: 'Executing GitvdDB compare', script: "${db_util.getFilePath("compareDBvsGit.ps1")}"
+                            }
+                        }
+                    }
+                }
+
+                stage("4. Regression") {
+                    when {  branch "REG" }
+                    environment { 
+                        DB_CRED = credentials('GCM-REG-DB-TCGACDS-RW')
+                        DB_CONN_STR = "${db_props['db.oracle.url.reg']}"   
+                    } 
+                    stages{
+                        stage("Git_vs_DB") {
+                            environment {
+                                DEVOPS_DB_CRED = credentials('GCM-DEVOPS-DB-TCGACDS-RW')
+                                DEVOPS_DB_CONN_STR = "${db_props['db.oracle.url.devops']}" 
+                            }
+                            steps{
+                                powershell label: 'Executing GitvdDB compare', script: "${db_util.getFilePath("compareDBvsGit.ps1")}"
+                            }
+                        }
+                    }
+                } 
+
+                stage("5. Production") {
+                    when {  branch "master" }
+                    environment {
+                        DB_CRED = credentials('GCM-PROD-DB-TCGACDS-RW')
+                        DB_CONN_STR = "${db_props['db.oracle.url.prod']}"
+                    }  
+                    stages{
+                        stage("Git_vs_DB") {
+                            environment {
+                                DEVOPS_DB_CRED = credentials('GCM-DEVOPS-DB-TCGACDS-RW')
+                                DEVOPS_DB_CONN_STR = "${db_props['db.oracle.url.devops']}"
+                            }
+                            steps{
+                                powershell label: 'Executing GitvdDB compare', script: "${db_util.getFilePath("compareDBvsGit.ps1")}"
+                            }
+                        }
+                    }
+                } 
+
+                stage("6. Break Fix") {
+                    when {  branch "breakfix" }
+                    environment {
+                        DB_CRED = credentials('GCM-HF-DB-L982-TCGACDS-RW')
+                        DB_CONN_STR = "${db_props['db.oracle.url.bf']}"  
+                    }  
+                    stages{
+                        stage("Git_vs_DB") {
+                            environment {
+                                DEVOPS_DB_CRED = credentials('GCM-DEVOPS-DB-TCGACDS-RW')
+                                DEVOPS_DB_CONN_STR = "${db_props['db.oracle.url.devops']}"
+                            }
+                            steps{
+                                powershell label: 'Executing GitvdDB compare', script: "${db_util.getFilePath("compareDBvsGit.ps1")}"
+                            }
+                        }
+                    }
+                }                
+            }
+        }
+    }
+    post { 
+        always { 
+            archiveArtifacts artifacts: 'CICD/*.sql,CICD/*.log,CICD/*.html,CICD/*.csv,CICD/*.txt,*.log,output/*', followSymlinks: false
+            cleanWs()
+        } 
+        success {
+            office365ConnectorSend color: '#00FF00', message: "Completed ${env.BRANCH_NAME} ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Success', webhookUrl: "${getJenkinsWebhookURL()}"
+        }
+        failure {
+            office365ConnectorSend color: '#FF0000', message: "Completed ${env.BRANCH_NAME} ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Failure', webhookUrl: "${getJenkinsWebhookURL()}"
+        }
+    }
+}

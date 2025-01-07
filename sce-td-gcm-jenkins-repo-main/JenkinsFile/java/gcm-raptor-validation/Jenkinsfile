@@ -1,0 +1,65 @@
+#!groovy
+import groovy.json.JsonBuilder
+import groovy.json.JsonSlurperClassic
+import java.util.List
+def getNodeNames(String app){     
+    raptor_props = loadProperties("RAPTOR") 
+    def nodeNames="${raptor_props['circuit.all.names']}"
+    if("Substation"== "${app}"){
+        nodeNames="${raptor_props['substation.all.names']}"
+    }
+    echo "app is ${app} nodeNames: ${nodeNames} "
+    return nodeNames
+}
+
+pipeline {
+    agent any 
+    options {
+    // office365ConnectorWebhooks([[name: "${env.JOB_NAME}", notifyAborted: true, notifyBackToNormal: true, notifyFailure: true, notifyNotBuilt: true, notifyRepeatedFailure: true, notifySuccess: true, notifyUnstable: true, startNotification: true, url: "${getJenkinsWebhookURL()}"]])
+    buildDiscarder logRotator(artifactDaysToKeepStr: '30', artifactNumToKeepStr: '30', daysToKeepStr: '30', numToKeepStr: '30')
+    disableConcurrentBuilds()
+    timestamps()
+    }
+
+    stages {
+        stage('Initialize') { 
+            steps {
+                script{      
+                    // active choice reactive working code.
+                    properties([parameters([choice(choices: ['DEV', 'ST', 'PT', 'REG', 'BF', 'PROD'], description: 'Please select Environment1', name: 'Environment'),
+                    choice(choices: ['Substation', 'Circuit'], description: 'Please select Application', name: 'APP'),
+                    reactiveChoice(choiceType: 'PT_MULTI_SELECT', description: 'Please select Node Names', filterLength: 1, filterable: true, name: 'NodeName', randomName: 'choice-parameter-1757530594928500', referencedParameters: 'APP', script: groovyScript(fallbackScript: [classpath: [], oldScript: '', sandbox: false, script: 'echo "failed"'], script: [classpath: [], oldScript: '', sandbox: true, script: 'if(APP.equals("Substation")){ return ["option1","option2","option3","option4"] }else{ return ["option100","option200","option300","option400"]}']))])])
+
+// Goal is to read values from manage jenkin files and show in multi select options
+// Below is the code flow which is not working. 
+
+// properties([parameters([choice(choices: ['DEV', 'ST', 'PT', 'REG', 'BF', 'PROD'], description: 'Please select Environment1', name: 'Environment'), choice(choices: ['Substation', 'Circuit'], description: 'Please select Application', name: 'APP'), reactiveChoice(choiceType: 'PT_MULTI_SELECT', description: 'Please select Node Names', filterLength: 1, filterable: true, name: 'NodeName', randomName: 'choice-parameter-1757530594928500', referencedParameters: 'APP', script: groovyScript(fallbackScript: [classpath: [], oldScript: '', sandbox: false, script: 'echo "failed"'], script: [classpath: [], oldScript: '', sandbox: true, script: '''def getNodeNamesInBuilt(String app){     
+// raptor_props = loadProperties("RAPTOR") 
+// def nodeNames="${raptor_props['circuit.all.names']}"
+// if("Substation"== "${app}"){
+//     nodeNames="${raptor_props['substation.all.names']}"
+// }
+// echo "app is ${app} Nodes are ${nodeNames} "
+// return nodeNames
+// }
+
+// def finalNodes =getNodeNamesInBuilt(${APP}) 
+// return ${finalNodes}''']))])])
+
+
+
+    getNodeNames("${APP}")
+    currentBuild.displayName = "#${env.BUILD_NUMBER} - ${env.ENVIRONMENT}"
+}}}}
+    post{
+        always { cleanWs() 
+        // success {
+        //     office365ConnectorSend color: '#00FF00', message: "Completed ${env.BRANCH_NAME} ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Success', webhookUrl: "${getJenkinsWebhookURL()}",factDefinitions: [[name: "Build URL", template: "${env.BUILD_URL}"],[name: "deployVersion", template: "deployVersion - ${env.deployVersion}"]]
+        // }
+        // failure{
+        //     office365ConnectorSend color: '#FF0000', message: "Completed ${env.BRANCH_NAME} ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)", status: 'Failure', webhookUrl: "${getJenkinsWebhookURL()}",factDefinitions: [[name: "Build URL", template: "${env.BUILD_URL}"],[name: "deployVersion", template: "deployVersion - ${env.deployVersion}"]]
+        // }
+}}}
+
+
+
